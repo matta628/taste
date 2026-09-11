@@ -245,10 +245,13 @@ function ComparePanel({ primaryName, primaryType, fromDate, toDate, granularity 
   useEffect(() => {
     if (!primaryName) return
     setLoading(true)
-    const params = { from_date: fromDate, to_date: toDate, granularity }
+    const params = { from_date: fromDate, to_date: toDate, granularity, metric: 'plays' }
+    // Fetch by each entity's type: on an album or track page this used to ask
+    // for artist history under the album/track name, and plotted nothing.
+    const history = { album: analytics.albumHistory, track: analytics.trackHistory }
     Promise.all(
       allEntities.map(e =>
-        analytics.artistHistory(e.id, params)
+        (history[e.type] ?? analytics.artistHistory)(e.id, params)
           .then(data => ({ name: e.id, data, primary: e.primary }))
           .catch(() => ({ name: e.id, data: [], primary: e.primary }))
       )

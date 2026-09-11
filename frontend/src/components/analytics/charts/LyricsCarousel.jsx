@@ -99,10 +99,14 @@ export function LyricsRail({ count = 3, side = 'left' }) {
   const { data } = useLyricLines(40)
   const items = data || []
   const navigate = useNavigate()
-  // Each card takes its own slice of the pool, so the rail never shows a line twice.
+  // Each card takes its own slice of the pool, so the rail never shows a line
+  // twice — and the right rail starts halfway in, or the two rails mirror each
+  // other whenever the pool is a fixed list (as it is in the static demo).
+  const half = Math.floor(items.length / 2)
+  const pool = side === 'right' ? [...items.slice(half), ...items.slice(0, half)] : items
   const slices = Array.from({ length: count }, (_, i) => {
-    const size = Math.floor(items.length / count) || 1
-    return items.slice(i * size, (i + 1) * size)
+    const size = Math.floor(pool.length / count) || 1
+    return pool.slice(i * size, (i + 1) * size)
   })
 
   if (!items.length) return null

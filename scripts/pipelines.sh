@@ -11,7 +11,7 @@
 # Every pipeline here is incremental and idempotent — a run that's interrupted
 # (reboot, rate limit, container restart) just resumes on the next tick.
 #
-# Usage: pipelines.sh <lastfm|lyrics|mood|visuals|musicbrainz|rebuild-stats>
+# Usage: pipelines.sh <lastfm|enrich|lyrics|mood|visuals|musicbrainz|rebuild-stats>
 set -uo pipefail
 
 API=http://localhost:8000
@@ -32,6 +32,7 @@ flock -n 200 || { echo "$(date -Is) [$1] already running, skipping" >> "$LOG"; e
 
 case "$1" in
   lastfm)        EP="/pipelines/lastfm/sync" ;;
+  enrich)        EP="/pipelines/lastfm/enrich" ;;   # artist tags -> genre breakdown
   lyrics)        EP="/pipelines/lyrics/fetch" ;;
   mood)          EP="/pipelines/mood/analyze" ;;
   visuals)       EP="/pipelines/visuals/fetch" ;;

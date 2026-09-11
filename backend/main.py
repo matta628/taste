@@ -24,6 +24,7 @@ from dotenv import load_dotenv
 load_dotenv(".env.secret")
 
 from backend.analytics import router as analytics_router
+from backend.books import router as books_router
 
 LYRICS_CACHE = Path("lyrics_cache.json")
 LYRICS_CACHE_MAX_AGE_DAYS = 30  # invalidated by sync, not by age
@@ -41,6 +42,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Tastemaker API", version="0.2.0", lifespan=lifespan)
 app.include_router(analytics_router)
+app.include_router(books_router)
 
 # Artist/album artwork fetched by backend.pipelines.fetch_visuals. Bind-mounted
 # from ./data/images so it survives image rebuilds.

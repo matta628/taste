@@ -31,6 +31,22 @@ export const api = {
   deletePractice:  (logId) => request('DELETE', `/practice/${logId}`),
 }
 
+export const books = {
+  list:   ()            => request('GET',    '/books'),
+  add:    (book)        => request('POST',   '/books', book),
+  update: (id, patch)   => request('PATCH',  `/books/${encodeURIComponent(id)}`, patch),
+  remove: (id)          => request('DELETE', `/books/${encodeURIComponent(id)}`),
+  // The Goodreads CSV goes up as multipart, so it skips request()'s JSON path.
+  importGoodreads: async (file) => {
+    const form = new FormData()
+    form.append('file', file)
+    const res = await fetch(`${BASE}/pipelines/goodreads/upload`, { method: 'POST', body: form })
+    if (!res.ok) throw new Error(`upload failed → ${res.status}`)
+    return res.json()
+  },
+  importStatus: () => request('GET', '/pipelines/status'),
+}
+
 export const analytics = {
   activity:       (p = {}) => request('GET', `/analytics/activity${buildQuery(p)}`),
   topAlbums:      (p = {}) => request('GET', `/analytics/top-albums${buildQuery(p)}`),
@@ -41,6 +57,7 @@ export const analytics = {
   newArtists:     (p = {}) => request('GET', `/analytics/new-artists${buildQuery(p)}`),
   listeningStreak:(p = {}) => request('GET', `/analytics/listening-streak${buildQuery(p)}`),
   topVisuals:     (p = {}) => request('GET', `/analytics/top-visuals${buildQuery(p)}`),
+  lyricLines:     (p = {}) => request('GET', `/analytics/lyric-lines${buildQuery(p)}`),
 
   artistHistory:  (name, p = {}) => request('GET', `/analytics/artist/${encodeURIComponent(name)}/history${buildQuery(p)}`),
   artistStats:    (name)          => request('GET', `/analytics/artist/${encodeURIComponent(name)}/stats`),

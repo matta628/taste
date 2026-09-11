@@ -5,6 +5,7 @@ import { useUIStore } from '../../store/uiStore';
 import { ActivityChart } from './charts/ActivityChart';
 import { GenreChart } from './charts/GenreChart';
 import { MoodChart } from './charts/MoodChart';
+import { LyricsCarousel, LyricsRail } from './charts/LyricsCarousel';
 import { TopEntitiesChart } from './charts/TopEntitiesChart';
 import { HeatmapChart } from './charts/HeatmapChart';
 import { DayOfWeekChart } from './charts/DayOfWeekChart';
@@ -30,12 +31,13 @@ const GRANULARITY = {
 };
 
 // Charts that occupy one grid column (half-width); all others span both
-const HALF_WIDTH = new Set(['genre', 'mood', 'dow', 'new_artists']);
+const HALF_WIDTH = new Set(['genre', 'mood', 'lyrics', 'dow', 'new_artists']);
 
 const CHART_LABELS = {
     activity:    'Activity',
     genre:       'Genre Breakdown',
     mood:        'Mood / Energy',
+    lyrics:      'Lyrics',
     top_entities:'Top Artists/Albums/Tracks',
     heatmap:     'Heatmap',
     dow:         'Plays by Day',
@@ -126,6 +128,8 @@ export function Dashboard() {
                 return <DraggableSection key={id} {...dragProps(id)}><GenreChart fromDate={fromDate} toDate={toDate} /></DraggableSection>;
             case 'mood':
                 return <DraggableSection key={id} {...dragProps(id)}><MoodChart fromDate={fromDate} toDate={toDate} /></DraggableSection>;
+            case 'lyrics':
+                return <DraggableSection key={id} {...dragProps(id)}><LyricsCarousel /></DraggableSection>;
             case 'top_entities':
                 return <DraggableSection key={id} {...dragProps(id)}><TopEntitiesChart fromDate={fromDate} toDate={toDate} period={period} genreFilter={dashboardGenreFilter} /></DraggableSection>;
             case 'heatmap':
@@ -165,7 +169,10 @@ export function Dashboard() {
     return (
         <AnalyticsShell>
             <div className="h-full overflow-y-auto">
-                <div className="px-6 py-5 max-w-7xl mx-auto">
+                <div className="px-6 py-5 flex gap-5 justify-center">
+                    {/* Lyrics run down the margins where there's room for them. */}
+                    <aside className="hidden 2xl:block w-52 shrink-0"><LyricsRail count={3} side="left" /></aside>
+                    <div className="flex-1 min-w-0 max-w-7xl">
                     {/* Time range + genre filter */}
                     <div className="flex flex-wrap items-center gap-3 mb-4">
                         <div className="flex items-center gap-1">
@@ -211,6 +218,8 @@ export function Dashboard() {
                             ))}
                         </div>
                     )}
+                    </div>
+                    <aside className="hidden 2xl:block w-52 shrink-0"><LyricsRail count={3} side="right" /></aside>
                 </div>
             </div>
         </AnalyticsShell>

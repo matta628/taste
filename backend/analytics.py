@@ -8,6 +8,8 @@ from datetime import datetime, timezone
 from uuid import uuid4
 
 import duckdb
+import random
+
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
@@ -1276,6 +1278,70 @@ def get_metrics(chart_type: str | None = None):
 
 # ---------------------------------------------------------------------------
 # Analytics Chat endpoint is defined in main.py (supports ANALYTICS_CHAT_STUBS)
+
+
+@router.get("/analytics/lyric-lines")
+def lyric_lines(limit: int = 40, days: int = 0, sample_tracks: int = 400):
+    """
+    Random couplets from the lyrics of tracks I actually play, for the
+    Dashboard's carousel.
+
+    Sampling is weighted the only way that matters here: the pool is the most
+    played tracks that have lyrics, so the carousel quotes what's in rotation
+    rather than something scrobbled once in 2019. `days` narrows the pool to a
+    recent window; 0 means all time.
+    """
+    limit = max(1, min(limit, 200))
+    conn = _db()
+    try:
+        window = ""
+        params: list = []
+        if days > 0:
+            window = "WHERE s.scrobbled_at >= now() - INTERVAL ? DAY"
+            params.append(days)
+        rows = conn.execute(f"""
+            WITH played AS (
+                SELECT s.track, s.artist, COUNT(*) AS plays
+                FROM raw_scrobbles s
+                {window}
+                GROUP BY s.track, s.artist
+            )
+            SELECT l.track, l.artist, l.lyrics, p.plays, i.local_path
+            FROM track_lyrics l
+            JOIN played p ON LOWER(p.track) = LOWER(l.track) AND LOWER(p.artist) = LOWER(l.artist)
+            LEFT JOIN entity_images i
+                   ON i.entity_type = 'artist' AND LOWER(i.entity_name) = LOWER(l.artist)
+            WHERE l.lyrics IS NOT NULL AND LENGTH(l.lyrics) > 80
+            ORDER BY p.plays DESC
+            LIMIT ?
+        """, [*params, max(limit, sample_tracks)]).fetchall()
+    finally:
+        conn.close()
+
+    random.shuffle(rows)
+    out = []
+    for track, artist, lyrics, plays, image in rows:
+        lines = [ln.strip() for ln in lyrics.splitlines()]
+        # Section markers ("[Chorus]"), blanks, and lines that are one word
+        # repeated ("Do-do, do-do...") all quote badly.
+        def quotable(ln):
+            words = [w.strip(",.!?\"'()").lower() for w in ln.split()]
+            return 12 <= len(ln) <= 90 and not ln.startswith("[") and len(set(words)) >= 3
+
+        usable = [i for i, ln in enumerate(lines) if quotable(ln)]
+        if not usable:
+            continue
+        start = random.choice(usable)
+        couplet = [lines[start]]
+        if start + 1 < len(lines) and quotable(lines[start + 1]):
+            couplet.append(lines[start + 1])
+        out.append({
+            "track": track, "artist": artist, "plays": plays,
+            "lines": couplet, "image_path": image,
+        })
+        if len(out) >= limit:
+            break
+    return out
 
 
 @router.get("/analytics/top-visuals")

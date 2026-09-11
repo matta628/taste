@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { analytics } from '../../api'
 import { useChartData } from './charts/useChartData'
+import { artworkUrl } from './artwork'
 
 // Deterministic tile colour for entities with no artwork, so the same artist
 // always gets the same shade instead of flickering between renders.
@@ -23,16 +24,13 @@ function initials(name) {
     .toUpperCase()
 }
 
-// Backend returns a path relative to its image root; nginx/vite both map
-// /api/* onto the backend with the prefix stripped. The static demo has no
-// backend, so its fixtures carry image_url (the artwork's CDN source) instead.
-const imageUrl = (p) => (p ? `/api/images/${p}` : null)
+
 
 function Tile({ item, entity, onOpen }) {
   const [broken, setBroken] = useState(false)
   const label = item.name
   const sub = entity === 'album' ? item.artist : `${item.plays.toLocaleString()} plays`
-  const src = item.image_url || imageUrl(item.image_path)
+  const src = artworkUrl(item)
   const showImage = src && !broken
 
   return (

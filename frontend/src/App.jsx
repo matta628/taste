@@ -1,21 +1,17 @@
 import { useEffect, useState } from 'react'
 import { BrowserRouter, Routes, Route, Navigate, useNavigate } from 'react-router-dom'
 import { api } from './api'
+import { AppShell } from './components/AppShell'
 import { SongLibrary } from './components/SongLibrary'
 import { SongForm } from './components/SongForm'
 import { PracticeQueue } from './components/PracticeQueue'
 import { NudgePanel } from './components/NudgePanel'
 import { OldChat } from './components/OldChat'
-import { ChatProvider, useChatContext } from './components/ChatContext'
-import { LyricsTape } from './components/LyricsTape'
-import { Vibes } from './components/Vibes'
+import { ChatProvider } from './components/ChatContext'
 import { PlaylistCreator } from './components/PlaylistCreator'
 import { SyncTab } from './components/SyncTab'
 import { MoodReview } from './components/MoodReview'
-import { useLyrics } from './components/useLyrics'
-import { SyncButton } from './components/SyncButton'
-import { StaleBanner } from './components/StaleBanner'
-import { DemoBanner } from './components/DemoBanner'
+import { BooksPage } from './components/books/BooksPage'
 import { Dashboard } from './components/analytics/Dashboard'
 import { DeepDive } from './components/analytics/DeepDive'
 import { Explore } from './components/analytics/Explore'
@@ -23,85 +19,39 @@ import { Discover } from './components/analytics/Discover'
 import { TimeMachine } from './components/analytics/TimeMachine'
 import './index.css'
 
-const NAV = [
-  { id: 'Library',   icon: '📚', label: 'Library'   },
-  { id: 'Practice',  icon: '🎸', label: 'Practice'  },
-  { id: 'Add Song',  icon: '+',  label: 'Add Song'   },
-  { id: 'Playlist',  icon: '♫',  label: 'Playlist'  },
-  { id: 'Chat',      icon: '✦',  label: 'Chat'       },
-  { id: 'Vibes',     icon: '♪',  label: 'Vibes'      },
-  { id: 'Mood',      icon: '♥',  label: 'Mood'       },
-  { id: 'Sync',      icon: '↻',  label: 'Sync'       },
-]
-
-function GuitarApp() {
-  const { streaming } = useChatContext()
-  const navigate = useNavigate()
-  const [tab, setTab] = useState('Library')
+// Library, Practice and Add Song all work off the same song list, so they share
+// one loader rather than fetching per route.
+function GuitarPage({ tab }) {
   const [songs, setSongs] = useState([])
-  const { tracks: lyrics } = useLyrics()
   const [editingSong, setEditingSong] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
+  const navigate = useNavigate()
 
   const fetchSongs = async () => {
     try {
-      const data = await api.getSongs()
-      setSongs(data)
+      setSongs(await api.getSongs())
       setError(null)
-    } catch (e) {
+    } catch {
       setError('Could not reach the API. Is the backend running?')
     } finally {
       setLoading(false)
     }
   }
-
   useEffect(() => { fetchSongs() }, [])
 
-  const handleAdd = async (form) => {
-    await api.addSong(form)
-    await fetchSongs()
-    setTab('Library')
-  }
-
-  const handleEdit = (song) => {
-    setEditingSong(song)
-    setTab('edit')
-  }
-
+  const handleAdd = async (form) => { await api.addSong(form); await fetchSongs(); navigate('/guitar') }
   const handleUpdate = async (form) => {
     await api.updateSong(editingSong.song_id, form)
     await fetchSongs()
     setEditingSong(null)
-    setTab('Library')
   }
-
   const handleDelete = async (id) => {
     if (!window.confirm('Remove this song?')) return
     await api.deleteSong(id)
     await fetchSongs()
   }
-
-  const handleUpdateDifficulty = async (id, difficulty) => {
-    await api.updateSong(id, { difficulty })
-    await fetchSongs()
-  }
-
-  const handleUpdateNotes = async (id, notes) => {
-    await api.updateSong(id, { notes })
-    await fetchSongs()
-  }
-
-  const handleUpdateDate = async (id, date_started) => {
-    await api.updateSong(id, { date_started })
-    await fetchSongs()
-  }
-
-  const handleNudgeSave = async (id, field, value) => {
-    await api.updateSong(id, { [field]: value })
-    await fetchSongs()
-  }
-
+  const patch = (id, updates) => api.updateSong(id, updates).then(fetchSongs)
   const handleJump = (songId) => {
     const el = document.getElementById(`song-${songId}`)
     if (!el) return
@@ -110,177 +60,78 @@ function GuitarApp() {
     setTimeout(() => el.classList.remove('highlight-row'), 1800)
   }
 
-  const activeTab = tab === 'edit' ? 'edit' : tab
-
-  const goTo = (t) => { setTab(t); setEditingSong(null) }
-
   return (
-    <div className="h-svh overflow-hidden bg-zinc-950 flex flex-col">
-      <LyricsTape tracks={lyrics} />
-
-      <DemoBanner />
-      <StaleBanner />
-
-      <div className="flex-1 overflow-hidden flex flex-col md:flex-row">
-
-      {/* ── Sidebar (desktop only) ── */}
-      <aside className="hidden md:flex flex-col w-56 shrink-0 border-r border-zinc-800 h-full">
-        <div className="px-5 py-6 border-b border-zinc-800">
-          <h1 className="text-lg font-semibold text-zinc-100 tracking-tight">🎸 Tastemaker</h1>
-          <p className="text-xs text-zinc-500 mt-0.5">guitar log</p>
+    <div className="h-full overflow-y-auto px-4 md:px-8 py-5">
+      {error && (
+        <div className="bg-red-950 border border-red-800 text-red-300 text-sm rounded-xl px-4 py-3 mb-4">{error}</div>
+      )}
+      {loading ? (
+        <p className="text-zinc-500 text-center pt-16">Loading…</p>
+      ) : editingSong ? (
+        <div className="max-w-lg">
+          <SongForm
+            initial={editingSong}
+            onSave={handleUpdate}
+            onCancel={() => setEditingSong(null)}
+            songs={songs}
+          />
         </div>
-        <nav className="flex flex-col gap-1 p-3 flex-1">
-          {NAV.map(({ id, icon, label }) => (
-            <button
-              key={id}
-              onClick={() => goTo(id)}
-              className={`flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-colors text-left ${
-                activeTab === id || (activeTab === 'edit' && id === 'Library')
-                  ? 'bg-violet-600 text-white'
-                  : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800'
-              }`}
-            >
-              <span className="text-base w-5 text-center">{icon}</span>
-              <span className="flex-1">{label}</span>
-              {id === 'Chat' && streaming && (
-                <span className="w-2 h-2 rounded-full bg-violet-400 animate-pulse" />
-              )}
-            </button>
-          ))}
-        </nav>
-        <div className="px-5 py-4 border-t border-zinc-800 flex flex-col gap-2">
-          <p className="text-xs text-zinc-600">{songs.length} entries</p>
-          <button
-            onClick={() => navigate('/dashboard')}
-            className="text-left text-xs text-zinc-500 hover:text-violet-400 transition-colors"
-          >
-            ✦ Analytics →
-          </button>
-        </div>
-      </aside>
-
-      {/* ── Main ── */}
-      <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
-
-        {/* Mobile header + tabs */}
-        <div className="md:hidden">
-          <header className="px-4 pt-6 pb-2">
-            <h1 className="text-xl font-semibold text-zinc-100 tracking-tight">🎸 Tastemaker</h1>
-            <p className="text-xs text-zinc-500 mt-0.5">guitar log</p>
-          </header>
-          <nav className="flex px-4 gap-1 border-b border-zinc-800 mt-2 overflow-x-auto scrollbar-none">
-            {NAV.map(({ id, label }) => (
-              <button
-                key={id}
-                onClick={() => goTo(id)}
-                className={`relative shrink-0 text-sm px-4 py-2.5 font-medium transition-colors border-b-2 -mb-px ${
-                  activeTab === id
-                    ? 'border-violet-500 text-violet-400'
-                    : 'border-transparent text-zinc-500 hover:text-zinc-300'
-                }`}
-              >
-                {label}
-                {id === 'Chat' && streaming && (
-                  <span className="absolute top-2 right-1 w-1.5 h-1.5 rounded-full bg-violet-400 animate-pulse" />
-                )}
-              </button>
-            ))}
-          </nav>
-        </div>
-
-        {/* Desktop page title */}
-        <div className="hidden md:flex items-center justify-between px-8 py-5 border-b border-zinc-800">
-          <h2 className="text-lg font-medium text-zinc-100">
-            {activeTab === 'edit' ? 'Edit Song' : activeTab}
-          </h2>
-          {activeTab === 'Library' && (
-            <span className="text-sm text-zinc-500">
-              {songs.filter(s => !s.notes?.trim()).length} songs missing notes
-            </span>
-          )}
-          {activeTab === 'Playlist' && (
-            <span className="text-sm text-zinc-500">powered by Claude · opens in Shortcuts</span>
-          )}
-          {activeTab === 'Chat' && (
-            <span className="text-sm text-zinc-500">powered by Claude</span>
-          )}
-          {activeTab === 'Vibes' && (
-            <span className="text-sm text-zinc-500">Genius lyrics · top 100 tracks</span>
-          )}
-        </div>
-
-        {/* Content */}
-        <main className={`flex-1 overflow-hidden ${activeTab === 'Playlist' ? '' : !['Chat', 'Vibes'].includes(activeTab) ? 'overflow-y-auto px-4 md:px-8 py-5' : 'px-4 md:px-8'}`}>
-          {error && (
-            <div className="bg-red-950 border border-red-800 text-red-300 text-sm rounded-xl px-4 py-3 mb-4">
-              {error}
-            </div>
-          )}
-
-          {loading ? (
-            <p className="text-zinc-500 text-center pt-16">Loading…</p>
-          ) : activeTab === 'Library' ? (
-            <>
-              <NudgePanel songs={songs} onSave={handleNudgeSave} onJump={handleJump} />
-              <SongLibrary songs={songs} onEdit={handleEdit} onDelete={handleDelete} onUpdateDifficulty={handleUpdateDifficulty} onUpdateNotes={handleUpdateNotes} onUpdateDate={handleUpdateDate} />
-            </>
-          ) : activeTab === 'Practice' ? (
-            <PracticeQueue songs={songs} onRefresh={fetchSongs} />
-          ) : activeTab === 'Add Song' ? (
-            <div className="max-w-lg">
-              <SongForm onSave={handleAdd} songs={songs} />
-            </div>
-          ) : activeTab === 'Mood' ? (
-            <MoodReview />
-          ) : activeTab === 'Sync' ? (
-            <SyncTab />
-          ) : activeTab === 'Playlist' ? (
-            <PlaylistCreator />
-          ) : activeTab === 'Vibes' ? (
-            <Vibes />
-          ) : activeTab === 'Chat' ? (
-            <OldChat onGoToPlaylist={() => goTo('Playlist')} />
-          ) : activeTab === 'edit' && editingSong ? (
-            <div className="max-w-lg">
-              <SongForm
-                initial={editingSong}
-                onSave={handleUpdate}
-                onCancel={() => { setEditingSong(null); setTab('Library') }}
-                songs={songs}
-              />
-            </div>
-          ) : null}
-        </main>
-      </div>
-      </div>
+      ) : tab === 'practice' ? (
+        <PracticeQueue songs={songs} onRefresh={fetchSongs} />
+      ) : tab === 'add' ? (
+        <div className="max-w-lg"><SongForm onSave={handleAdd} songs={songs} /></div>
+      ) : (
+        <>
+          <NudgePanel songs={songs} onSave={(id, field, value) => patch(id, { [field]: value })} onJump={handleJump} />
+          <SongLibrary
+            songs={songs}
+            onEdit={setEditingSong}
+            onDelete={handleDelete}
+            onUpdateDifficulty={(id, difficulty) => patch(id, { difficulty })}
+            onUpdateNotes={(id, notes) => patch(id, { notes })}
+            onUpdateDate={(id, date_started) => patch(id, { date_started })}
+          />
+        </>
+      )}
     </div>
   )
 }
 
+function ChatPage() {
+  const navigate = useNavigate()
+  return (
+    <div className="h-full px-4 md:px-8">
+      <OldChat onGoToPlaylist={() => navigate('/playlist')} />
+    </div>
+  )
+}
+
+const scroller = (children) => <div className="h-full overflow-y-auto px-4 md:px-8 py-5">{children}</div>
+
 export default function App() {
   return (
     <BrowserRouter basename={import.meta.env.VITE_BASE_PATH || '/'}>
-      <Routes>
-        <Route path="/" element={
-          import.meta.env.VITE_DEMO_MODE === 'true'
-            ? <Navigate to="/dashboard" replace />
-            : <ChatProvider>
-                <GuitarApp />
-              </ChatProvider>
-        } />
-        {/* Stable alias so "← Guitar" works from the analytics side even in
-            demo mode, where "/" always redirects to /dashboard. */}
-        <Route path="/guitar" element={
-          <ChatProvider>
-            <GuitarApp />
-          </ChatProvider>
-        } />
-        <Route path="/dashboard"          element={<Dashboard />} />
-        <Route path="/explore"            element={<Explore />} />
-        <Route path="/explore/:type/:id"  element={<DeepDive />} />
-        <Route path="/discover"           element={<Discover />} />
-        <Route path="/timemachine"        element={<TimeMachine />} />
-      </Routes>
+      <ChatProvider>
+        <Routes>
+          <Route element={<AppShell />}>
+            <Route path="/" element={<Navigate to="/dashboard" replace />} />
+            <Route path="/dashboard" element={<Dashboard />} />
+            <Route path="/explore" element={<Explore />} />
+            <Route path="/explore/:type/:id" element={<DeepDive />} />
+            <Route path="/discover" element={<Discover />} />
+            <Route path="/timemachine" element={<TimeMachine />} />
+            <Route path="/mood" element={scroller(<MoodReview />)} />
+            <Route path="/chat" element={<ChatPage />} />
+            <Route path="/playlist" element={<div className="h-full px-4 md:px-8"><PlaylistCreator /></div>} />
+            <Route path="/books" element={<BooksPage />} />
+            <Route path="/guitar" element={<GuitarPage tab="library" />} />
+            <Route path="/guitar/practice" element={<GuitarPage tab="practice" />} />
+            <Route path="/guitar/add" element={<GuitarPage tab="add" />} />
+            <Route path="/sync" element={scroller(<SyncTab />)} />
+            <Route path="*" element={<Navigate to="/dashboard" replace />} />
+          </Route>
+        </Routes>
+      </ChatProvider>
     </BrowserRouter>
   )
 }

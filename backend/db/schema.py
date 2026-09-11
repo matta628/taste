@@ -57,9 +57,21 @@ def create_schema():
             original_year   INTEGER,
             num_pages       INTEGER,
             ol_subjects     VARCHAR[],            -- OpenLibrary subjects
-            ol_description  TEXT                  -- OpenLibrary description
+            ol_description  TEXT,                 -- OpenLibrary description
+            -- Mine, not Goodreads'. A Goodreads export has no "date started"
+            -- and no private notes, and the importer only updates the columns
+            -- it owns, so these survive every re-import.
+            date_started    DATE,
+            notes           TEXT,
+            source          VARCHAR DEFAULT 'goodreads'  -- or 'manual'
         )
     """)
+    for col, typedef in (("date_started", "DATE"), ("notes", "TEXT"),
+                         ("source", "VARCHAR DEFAULT 'goodreads'")):
+        try:
+            conn.execute(f"ALTER TABLE raw_books ADD COLUMN IF NOT EXISTS {col} {typedef}")
+        except Exception:
+            pass
 
     conn.execute("""
         CREATE TABLE IF NOT EXISTS raw_reddit_posts (

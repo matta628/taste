@@ -8,7 +8,10 @@ export const useUIStore = create((set, get) => ({
     // Dashboard state
     dashboardPeriod: '90d',
     dashboardGenreFilter: null, // null or genre name
-    dashboardChartOrder: ['activity', 'genre', 'mood', 'top_entities', 'heatmap', 'dow', 'new_artists', 'streak'],
+    // 'lyrics' sits where the mood donut used to: mood is Claude's guess from
+    // lyrics and tags, and a real line from a song in rotation says more.
+    // Mood is still one click away in the hidden-charts strip.
+    dashboardChartOrder: ['activity', 'genre', 'lyrics', 'top_entities', 'heatmap', 'dow', 'new_artists', 'streak'],
     dashboardHiddenCharts: [],
     activeDashboardId: null,
     setDashboardPeriod: (period) => set({ dashboardPeriod: period }),

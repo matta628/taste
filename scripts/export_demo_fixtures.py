@@ -40,6 +40,8 @@ from backend.books import list_books  # noqa: E402
 ROOT = Path(__file__).resolve().parent.parent
 OUT_PATH = ROOT / "frontend/src/demo/fixtures/analytics.json"
 BOOKS_PATH = ROOT / "frontend/src/demo/fixtures/books.json"
+LYRICS_PATH = ROOT / "frontend/src/demo/fixtures/lyrics.json"   # the ticker's snippets
+LYRICS_CACHE = ROOT / "lyrics_cache.json"
 ENTITY_EXPORT_LIMIT = 300
 NUM_DEEP_DIVE_ARTISTS = 10
 # Beyond everything reachable from the Dashboard and Time Machine lists, give
@@ -246,6 +248,13 @@ def main():
             mood_tag_tracks(tag, limit=50)
     print(f"[export] Tag drill-down fixtures for {len(top_genre_tags)} genres, "
           f"{len(top_mood_tags)} moods")
+
+    # -- Lyrics ticker -------------------------------------------------------
+    # Straight from the cache the API serves, so the fixture can't drift from
+    # its shape (it once still said "title" after the field became "track").
+    if LYRICS_CACHE.exists() and LYRICS_CACHE.stat().st_size > 10:
+        LYRICS_PATH.write_text(LYRICS_CACHE.read_text())
+        print("[export] Lyrics ticker snippets exported")
 
     # -- Reading log ---------------------------------------------------------
     BOOKS_PATH.write_text(json.dumps(list_books(), indent=None, separators=(",", ":"), default=str))

@@ -10,9 +10,9 @@ from uuid import uuid4
 import duckdb
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
-from anthropic import Anthropic
 
 from backend.db.schema import DB_PATH
+from backend.db.connect import connect as db_connect
 
 router = APIRouter()
 
@@ -49,7 +49,8 @@ _VALID_SORT: dict[str, set] = {
 
 
 def _db():
-    return duckdb.connect(str(DB_PATH))
+    # Retries through a pipeline's short write-lock window — see backend/db/connect.py
+    return db_connect()
 
 
 def _ensure_genre_override():
@@ -1275,3 +1276,70 @@ def get_metrics(chart_type: str | None = None):
 
 # ---------------------------------------------------------------------------
 # Analytics Chat endpoint is defined in main.py (supports ANALYTICS_CHAT_STUBS)
+
+
+@router.get("/analytics/top-visuals")
+def top_visuals(period: str = "90d", limit: int = 18, entity: str = "artist"):
+    """
+    Top artists or albums for a period, joined to their fetched artwork.
+
+    Powers the artwork strip at the top of the Dashboard. Entities without an
+    image are still returned (with image=None) so the UI can show a styled
+    initials tile rather than a gap — artwork coverage is never 100%, since
+    Deezer won't match every obscure release.
+    """
+    period_col = {
+        "7d": "plays_7d", "30d": "plays_30d", "90d": "plays_90d",
+        "180d": "plays_180d", "1y": "plays_1y", "2y": "plays_2y",
+        "5y": "plays_5y", "all": "total_plays",
+    }.get(period, "plays_90d")
+    limit = max(1, min(limit, 60))
+    conn = _db()
+
+    try:
+        if entity == "album":
+            rows = conn.execute(f"""
+                SELECT s.album, s.artist, s.{period_col} AS plays, i.local_path
+                FROM album_stats s
+                LEFT JOIN entity_images i
+                       ON i.entity_type = 'album'
+                      AND LOWER(i.entity_name) = LOWER(s.album || '||' || s.artist)
+                WHERE s.{period_col} > 0 AND s.album IS NOT NULL AND s.album <> ''
+                ORDER BY s.{period_col} DESC
+                LIMIT ?
+            """, [limit]).fetchall()
+            return [
+                {
+                    "name": r[0],
+                    "artist": r[1],
+                    "plays": r[2],
+                    # Relative to the image root; the frontend prefixes it
+                    # (/api/images/...) since only it knows the proxy layout.
+                    "image_path": r[3] or None,
+                }
+                for r in rows
+            ]
+
+        rows = conn.execute(f"""
+            SELECT s.artist, s.{period_col} AS plays, i.local_path
+            FROM artist_stats s
+            LEFT JOIN entity_images i
+                   ON i.entity_type = 'artist' AND LOWER(i.entity_name) = LOWER(s.artist)
+            WHERE s.{period_col} > 0
+            ORDER BY s.{period_col} DESC
+            LIMIT ?
+        """, [limit]).fetchall()
+        return [
+            {
+                "name": r[0],
+                "artist": None,
+                "plays": r[1],
+                "image_path": r[2] or None,
+            }
+            for r in rows
+        ]
+    except Exception as e:
+        # entity_images may not exist until the visuals pipeline first runs.
+        raise HTTPException(status_code=503, detail=f"visuals unavailable: {e}")
+    finally:
+        conn.close()

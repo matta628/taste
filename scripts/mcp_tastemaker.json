@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "tastemaker": {
+      "command": "/home/mambo/tastemaker/.venv/bin/python",
+      "args": ["-m", "backend.agent.mcp_server"],
+      "cwd": "/home/mambo/tastemaker",
+      "env": {"PYTHONPATH": "/home/mambo/tastemaker"}
+    }
+  }
+}

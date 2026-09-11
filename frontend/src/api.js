@@ -40,6 +40,7 @@ export const analytics = {
   dayOfWeek:      (p = {}) => request('GET', `/analytics/day-of-week${buildQuery(p)}`),
   newArtists:     (p = {}) => request('GET', `/analytics/new-artists${buildQuery(p)}`),
   listeningStreak:(p = {}) => request('GET', `/analytics/listening-streak${buildQuery(p)}`),
+  topVisuals:     (p = {}) => request('GET', `/analytics/top-visuals${buildQuery(p)}`),
 
   artistHistory:  (name, p = {}) => request('GET', `/analytics/artist/${encodeURIComponent(name)}/history${buildQuery(p)}`),
   artistStats:    (name)          => request('GET', `/analytics/artist/${encodeURIComponent(name)}/stats`),

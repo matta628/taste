@@ -84,7 +84,7 @@ def parse_date(s: str) -> date | None:
 
 def parse_int(s: str) -> int | None:
     try:
-        return int(s.strip()) if s.strip() else None
+        return int(float(s.strip())) if s.strip() else None
     except ValueError:
         return None
 

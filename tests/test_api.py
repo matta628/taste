@@ -83,7 +83,7 @@ def _parse_sse(raw: str) -> list[dict]:
 
 
 def test_agent_playlist_streams_playlist_event(client, mock_playlist_agent):
-    with patch("backend.agent.graph.get_agent", new=AsyncMock(return_value=mock_playlist_agent)):
+    with patch("backend.agent.bridge_client.stream_agent", new=mock_playlist_agent):
         r = client.post(
             "/agent/playlist",
             json={"prompt": "Focus music for work", "playlist_id": None},
@@ -108,7 +108,7 @@ def test_agent_playlist_streams_playlist_event(client, mock_playlist_agent):
 
 
 def test_agent_playlist_streams_text_chunks(client, mock_playlist_agent):
-    with patch("backend.agent.graph.get_agent", new=AsyncMock(return_value=mock_playlist_agent)):
+    with patch("backend.agent.bridge_client.stream_agent", new=mock_playlist_agent):
         r = client.post(
             "/agent/playlist",
             json={"prompt": "Focus music for work", "playlist_id": None},
@@ -121,7 +121,7 @@ def test_agent_playlist_streams_text_chunks(client, mock_playlist_agent):
 
 
 def test_agent_playlist_always_ends_with_done(client, mock_playlist_agent):
-    with patch("backend.agent.graph.get_agent", new=AsyncMock(return_value=mock_playlist_agent)):
+    with patch("backend.agent.bridge_client.stream_agent", new=mock_playlist_agent):
         r = client.post(
             "/agent/playlist",
             json={"prompt": "Anything", "playlist_id": None},
@@ -136,7 +136,7 @@ def test_agent_playlist_always_ends_with_done(client, mock_playlist_agent):
 # ---------------------------------------------------------------------------
 
 def test_agent_chat_streams_text(client, mock_chat_agent):
-    with patch("backend.agent.graph.get_agent", new=AsyncMock(return_value=mock_chat_agent)):
+    with patch("backend.agent.bridge_client.stream_agent", new=mock_chat_agent):
         r = client.post(
             "/agent/chat",
             json={"message": "What have I been listening to?", "thread_id": "test-thread-1"},
@@ -149,7 +149,7 @@ def test_agent_chat_streams_text(client, mock_chat_agent):
 
 
 def test_agent_chat_always_ends_with_done(client, mock_chat_agent):
-    with patch("backend.agent.graph.get_agent", new=AsyncMock(return_value=mock_chat_agent)):
+    with patch("backend.agent.bridge_client.stream_agent", new=mock_chat_agent):
         r = client.post(
             "/agent/chat",
             json={"message": "Hello", "thread_id": "test-thread-2"},

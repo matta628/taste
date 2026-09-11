@@ -22,11 +22,23 @@ def query_database(sql: str) -> str:
 
     Tables available:
     - raw_scrobbles(track, artist, album, scrobbled_at, mbid)
-    - raw_books(book_id, title, author, isbn, rating 0-5, date_read, shelf, ol_subjects[], ol_description)
+    - raw_books(book_id, title, author, isbn, rating 0-5, date_read, date_added,
+      shelf, exclusive_shelf, ol_subjects[], ol_description)
+      -- exclusive_shelf is the real reading status: 'read'/'to-read'/'currently-reading'. USE THIS.
+      -- shelf holds Goodreads' custom-shelf column and is NULL for every row -- never filter on it.
+      -- rating 0 means unrated, not a 0-star rating.
     - guitar_songs(song_id, title, artist, part, difficulty 1-5, status, notes, date_started)
     - practice_log(log_id, song_id, practiced_at)
-    - artists(artist_id, name), tracks(track_id, title, artist_id)
-    - scrobbles(scrobble_id, track_id, artist_id, album_id, scrobbled_at)
+    - artist_stats(artist, total_plays, plays_7d/30d/90d/180d/1y/2y/5y, rank_*,
+      first_heard, last_heard, days_since_last_heard, unique_tracks, unique_albums,
+      longest_streak_days, current_streak_days, peak_week_date, peak_week_plays)
+      -- PRE-AGGREGATED per-artist rollups. Use these instead of GROUP BY over
+      -- raw_scrobbles for any "top artists"/"how much do I play X" question.
+    - album_stats(album, artist, ...same shape...), track_stats(track, artist, ...same shape...)
+    - entity_images(entity_type, entity_name, display_name, artist, local_path)
+      -- Fetched artist/album artwork. entity_name for albums is 'album||artist'.
+    - NOTE: the dbt mart tables (artists, albums, tracks, scrobbles) exist but are
+      EMPTY -- never query them. raw_scrobbles + the *_stats tables are the truth.
     - taste_tags(tag_id, entity_type, entity_id, tag, source)
     - artist_tags(artist_name, tag, weight 0-100)         -- Last.fm genre/mood tags per artist
     - artist_similar(artist_name, similar_artist, similarity 0-1) -- taste graph
@@ -45,7 +57,9 @@ def query_database(sql: str) -> str:
     - track_lyrics(track, artist, lyrics TEXT, source, fetched_at)
       -- Full lyrics. ~60-70% coverage (instrumentals/obscure tracks absent).
     - track_mood(track, artist, tags VARCHAR[], scores JSON, overridden BOOLEAN, analyzed_at)
-      -- Zero-shot NLP mood tags. Multi-label — a track can be melancholic AND nostalgic.
+      -- Claude-assigned mood tags. Multi-label — a track can be melancholic AND nostalgic.
+      -- Only covers tracks that have lyrics (~67% of the library), so LEFT JOIN it;
+      -- an INNER JOIN silently drops every instrumental and unmatched track.
       -- tags[]: labels with score >= 0.3. Filter: WHERE 'melancholic' = ANY(tags)
       -- 14 labels: melancholic, euphoric, anxious, tender, defiant, nostalgic, dark,
       --   hopeful, lonely, romantic, bitter, raw, peaceful, restless

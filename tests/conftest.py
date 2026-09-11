@@ -146,40 +146,42 @@ def client(app):
 
 
 # ---------------------------------------------------------------------------
-# Mock LangGraph agent
+# Mock Claude bridge
+#
+# These mirror the event vocabulary scripts/claude_bridge.py emits, so the
+# endpoints are exercised without spawning a real `claude` subprocess.
 # ---------------------------------------------------------------------------
 
 def make_text_chunk(text: str):
-    """Build a fake on_chat_model_stream event chunk."""
-    chunk = MagicMock()
-    chunk.content = text
-    return {"event": "on_chat_model_stream", "data": {"chunk": chunk}}
+    return {"type": "text", "text": text}
 
 
-def make_tool_start(name: str):
-    return {"event": "on_tool_start", "name": name, "data": {"input": {}}}
+def make_tool_start(name: str, tool_input: dict | None = None):
+    return {"type": "tool_input", "name": name, "input": tool_input or {}}
 
 
 def make_tool_end(name: str, output_content: str):
-    msg = MagicMock()
-    msg.content = output_content
-    return {"event": "on_tool_end", "name": name, "data": {"output": msg}}
+    return {"type": "tool_end", "name": name, "result": output_content}
 
 
-class MockAgent:
-    """Fake LangGraph agent whose astream_events yields a scripted event sequence."""
+def make_error(message: str):
+    return {"type": "error", "message": message}
 
-    def __init__(self, events: list):
-        self._events = events
 
-    async def astream_events(self, *args, **kwargs):
-        for event in self._events:
+def mock_stream_agent(events: list):
+    """Build a stand-in for bridge_client.stream_agent yielding scripted events."""
+
+    async def _stream(prompt, thread_id=None, mode="chat"):
+        for event in events:
             yield event
+        yield {"type": "done"}
+
+    return _stream
 
 
 @pytest.fixture
 def mock_playlist_agent():
-    """Agent that calls build_playlist and returns a valid playlist."""
+    """Bridge stream that calls build_playlist and returns a valid playlist."""
     from backend.agent.tools import build_playlist
 
     playlist_output = build_playlist.invoke({
@@ -192,20 +194,20 @@ def mock_playlist_agent():
 
     events = [
         make_text_chunk("Let me check your listening history..."),
-        make_tool_start("query_database"),
+        make_tool_start("query_database", {"sql": "SELECT artist FROM raw_scrobbles"}),
         make_tool_end("query_database", "| artist | plays |\n|---|---|\n| The Beatles | 50 |"),
         make_text_chunk("Based on your taste, here's a focus playlist."),
         make_tool_start("build_playlist"),
         make_tool_end("build_playlist", playlist_output),
     ]
-    return MockAgent(events)
+    return mock_stream_agent(events)
 
 
 @pytest.fixture
 def mock_chat_agent():
-    """Agent that streams a simple text response."""
+    """Bridge stream with a simple text response."""
     events = [
         make_text_chunk("You've been listening to "),
         make_text_chunk("The Beatles a lot lately."),
     ]
-    return MockAgent(events)
+    return mock_stream_agent(events)

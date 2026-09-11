@@ -86,7 +86,7 @@ def rebuild_stats_tables():
         ),
         peak_weeks AS (
             SELECT artist, week_start, week_plays,
-                RANK() OVER (PARTITION BY artist ORDER BY week_plays DESC) AS rn
+                ROW_NUMBER() OVER (PARTITION BY artist ORDER BY week_plays DESC, week_start) AS rn
             FROM weekly_plays
         )
         SELECT
@@ -196,7 +196,7 @@ def rebuild_stats_tables():
         ),
         peak_weeks AS (
             SELECT album, artist, week_start, week_plays,
-                RANK() OVER (PARTITION BY album, artist ORDER BY week_plays DESC) AS rn
+                ROW_NUMBER() OVER (PARTITION BY album, artist ORDER BY week_plays DESC, week_start) AS rn
             FROM weekly_plays
         )
         SELECT
@@ -303,7 +303,7 @@ def rebuild_stats_tables():
         ),
         peak_weeks AS (
             SELECT track, artist, week_start, week_plays,
-                RANK() OVER (PARTITION BY track, artist ORDER BY week_plays DESC) AS rn
+                ROW_NUMBER() OVER (PARTITION BY track, artist ORDER BY week_plays DESC, week_start) AS rn
             FROM weekly_plays
         )
         SELECT

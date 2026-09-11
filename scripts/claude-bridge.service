@@ -1,0 +1,39 @@
+# Host-side Claude bridge — see scripts/claude_bridge.py.
+#
+# Install as a *user* service (not system): it needs the user's `claude` CLI and
+# the subscription token in ~/.claude_token.
+#
+#   mkdir -p ~/.config/systemd/user
+#   cp scripts/claude-bridge.service ~/.config/systemd/user/
+#   # put BRIDGE_TOKEN=<secret> in ~/.claude_bridge_env (chmod 600)
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now claude-bridge
+#   sudo loginctl enable-linger mambo    # so it survives logout / starts at boot
+#
+# Logs: journalctl --user -u claude-bridge -f
+
+[Unit]
+Description=Tastemaker Claude bridge (headless claude under subscription auth)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/mambo/tastemaker
+# BRIDGE_TOKEN lives here, out of the repo.
+EnvironmentFile=/home/mambo/.claude_bridge_env
+# Bind to the Docker bridge gateway so the backend container can reach it.
+# Not 0.0.0.0: this must not be exposed to the LAN or Tailscale.
+Environment=BRIDGE_HOST=172.18.0.1
+Environment=BRIDGE_PORT=8787
+# 1, not 2: on a 2GB Pi each `claude` peaks ~250-450MB, and JAT's cron burst
+# (every 4h, ~4 sequential generations) already holds one. This is a
+# single-user app, so concurrent chats never actually happen.
+Environment=BRIDGE_MAX_CONCURRENT=1
+Environment=PATH=/home/mambo/.npm-global/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/home/mambo/tastemaker/.venv/bin/python /home/mambo/tastemaker/scripts/claude_bridge.py
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

@@ -11,12 +11,20 @@ services:
       - ./tastemaker.db:/app/tastemaker.db
       # Lyrics cache persists across rebuilds
       - ./lyrics_cache.json:/app/lyrics_cache.json
-      # LangGraph conversation checkpoints — survives container restarts
-      - ./checkpoints.db:/app/checkpoints.db
       # Secrets mounted at runtime — never baked into the image
       - ./.env.secret:/app/.env.secret:ro
+      # Artist/album artwork — persists across rebuilds, served at /images/*
+      - ./data/images:/app/data/images
     env_file:
       - .env
+    environment:
+      # Host-side Claude bridge (scripts/claude_bridge.py). The container has no
+      # `claude` CLI and no subscription token, so every Claude call is
+      # forwarded to the host over the Docker bridge gateway.
+      - CLAUDE_BRIDGE_URL=http://172.18.0.1:8787
+      - BRIDGE_TOKEN=${BRIDGE_TOKEN}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
 
   frontend:
     build:

@@ -16,6 +16,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from pathlib import Path
 from pydantic import BaseModel, Field
 from dotenv import load_dotenv
@@ -28,6 +29,7 @@ LYRICS_CACHE = Path("lyrics_cache.json")
 LYRICS_CACHE_MAX_AGE_DAYS = 30  # invalidated by sync, not by age
 
 from backend.db.schema import DB_PATH, create_schema
+from backend.db.connect import connect as db_connect
 
 
 @asynccontextmanager
@@ -39,6 +41,12 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Tastemaker API", version="0.2.0", lifespan=lifespan)
 app.include_router(analytics_router)
+
+# Artist/album artwork fetched by backend.pipelines.fetch_visuals. Bind-mounted
+# from ./data/images so it survives image rebuilds.
+IMAGE_ROOT = Path(os.environ.get("IMAGE_ROOT", Path(__file__).parent.parent / "data" / "images"))
+IMAGE_ROOT.mkdir(parents=True, exist_ok=True)
+app.mount("/images", StaticFiles(directory=str(IMAGE_ROOT)), name="images")
 
 app.add_middleware(
     CORSMiddleware,
@@ -63,10 +71,15 @@ _mb_running: bool = False
 _mb_last_error: str | None = None
 _lyrics_fetch_running:    bool = False
 _lyrics_fetch_last_error: str | None = None
+_mood_running:    bool = False
+_mood_last_error: str | None = None
+_visuals_running:    bool = False
+_visuals_last_error: str | None = None
 
 
 def db():
-    return duckdb.connect(str(DB_PATH))
+    # Retries through a pipeline's short write-lock window — see backend/db/connect.py
+    return db_connect()
 
 
 # ---------------------------------------------------------------------------
@@ -785,6 +798,79 @@ async def trigger_lyrics_fetch():
     return {"status": "fetching"}
 
 
+def _bg_pipeline(module: str, args: list[str], tag: str, set_running, set_error):
+    """Shared runner for the background pipeline endpoints."""
+    async def run():
+        set_running(True)
+        set_error(None)
+        try:
+            import subprocess
+            result = await asyncio.to_thread(
+                subprocess.run,
+                ["python", "-m", module, *args],
+                capture_output=True, text=True,
+            )
+            tail = (result.stdout or result.stderr or "")[-800:]
+            if result.returncode != 0:
+                set_error(f"Exit {result.returncode}: {(result.stderr or result.stdout or 'no output')[-400:]}")
+                print(f"[{tag}] FAILED (exit {result.returncode}):", tail)
+            else:
+                print(f"[{tag}] done:", tail)
+        except Exception as e:
+            set_error(str(e))
+            print(f"[{tag}] exception: {e}")
+        finally:
+            set_running(False)
+
+    return run
+
+
+@app.post("/pipelines/mood/analyze", status_code=202)
+async def trigger_mood_analyze(limit: int | None = None):
+    """Tag lyric moods via headless Claude. Incremental and resumable."""
+    global _mood_running
+    if _mood_running:
+        return {"status": "already_running"}
+
+    def _set_running(v):
+        global _mood_running
+        _mood_running = v
+
+    def _set_error(v):
+        global _mood_last_error
+        _mood_last_error = v
+
+    args = ["--limit", str(limit)] if limit else []
+    asyncio.create_task(_bg_pipeline(
+        "backend.pipelines.analyze_mood_claude", args, "mood", _set_running, _set_error
+    )())
+    return {"status": "analyzing"}
+
+
+@app.post("/pipelines/visuals/fetch", status_code=202)
+async def trigger_visuals_fetch(kind: str = "both", window_days: int | None = None):
+    """Fetch artist/album artwork from Deezer. Incremental."""
+    global _visuals_running
+    if _visuals_running:
+        return {"status": "already_running"}
+
+    def _set_running(v):
+        global _visuals_running
+        _visuals_running = v
+
+    def _set_error(v):
+        global _visuals_last_error
+        _visuals_last_error = v
+
+    args = ["--kind", kind]
+    if window_days:
+        args += ["--window-days", str(window_days)]
+    asyncio.create_task(_bg_pipeline(
+        "backend.pipelines.fetch_visuals", args, "visuals", _set_running, _set_error
+    )())
+    return {"status": "fetching"}
+
+
 class MoodUpdateRequest(BaseModel):
     tags: list[str]
 
@@ -1006,10 +1092,7 @@ async def agent_playlist(body: PlaylistRequest):
     Generate or modify a playlist from a natural language prompt.
     Streams SSE. Emits a 'playlist' event with the final JSON, then auto-saves to DB.
     """
-    from backend.agent.graph import get_agent
-
-    agent = await get_agent()
-    config = {"configurable": {"thread_id": f"playlist-{id(body)}"}}
+    from backend.agent.bridge_client import stream_agent
 
     # Build the prompt — include existing playlist context when modifying
     if body.playlist_id:
@@ -1042,11 +1125,11 @@ async def agent_playlist(body: PlaylistRequest):
         queries: list[str] = []
         thoughts_parts: list[str] = []
 
-        gen = agent.astream_events(
-            {"messages": [{"role": "user", "content": system_msg}]},
-            config=config,
-            version="v2",
-        )
+        gen = stream_agent(
+            system_msg,
+            thread_id=f"playlist-{body.playlist_id or id(body)}",
+            mode="playlist",
+        ).__aiter__()
         try:
             while True:
                 try:
@@ -1056,54 +1139,38 @@ async def agent_playlist(body: PlaylistRequest):
                 except asyncio.TimeoutError:
                     yield ": keepalive\n\n"
                     continue
-                kind = event["event"]
-                if kind == "on_chat_model_stream":
-                    chunk = event["data"]["chunk"]
-                    text = None
-                    if chunk.content and isinstance(chunk.content, list):
-                        for part in chunk.content:
-                            if isinstance(part, dict) and part.get("type") == "text":
-                                text = part["text"]
-                    elif isinstance(chunk.content, str) and chunk.content:
-                        text = chunk.content
+                kind = event.get("type")
+                if kind == "text":
+                    text = event.get("text") or ""
                     if text:
                         thoughts_parts.append(text)
                         encoded = "\n".join(f"data: {line}" for line in text.split("\n"))
                         yield f"{encoded}\n\n"
 
-                elif kind == "on_tool_start":
+                elif kind == "tool_start":
+                    yield f"event: tool_start\ndata: {event.get('name', 'tool')}\n\n"
+
+                elif kind == "tool_input":
                     tool = event.get("name", "tool")
-                    print(f"[playlist] Tool start: {tool}")
+                    print(f"[playlist] Tool call: {tool}")
                     # Capture SQL queries for provenance
                     if tool == "query_database":
-                        inp = event.get("data", {})
-                        if isinstance(inp, dict):
-                            sql = inp.get("input", {}).get("sql", "")
-                            if sql:
-                                queries.append(sql)
-                    yield f"event: tool_start\ndata: {tool}\n\n"
+                        sql = (event.get("input") or {}).get("sql", "")
+                        if sql:
+                            queries.append(sql)
 
-                elif kind == "on_tool_end":
+                elif kind == "error":
+                    msg = str(event.get("message", "unknown error")).replace("\n", " ")
+                    print(f"[playlist] Bridge error: {msg}")
+                    yield f"event: error\ndata: {msg}\n\n"
+                    return
+
+                elif kind == "tool_end":
                     tool = event.get("name", "")
                     print(f"[playlist] Tool end: {tool}")
                     if tool == "build_playlist":
-                        data = event.get("data", {})
-                        print(f"[playlist] on_tool_end data type: {type(data).__name__}, keys: {list(data.keys()) if isinstance(data, dict) else 'n/a'}")
-
-                        # LangGraph v2: event["data"] is a dict with key "output" = ToolMessage
-                        # Older versions: event["data"] is the ToolMessage directly
-                        if isinstance(data, dict):
-                            output = data.get("output", "")
-                            if hasattr(output, "content"):
-                                raw = output.content   # ToolMessage inside dict
-                            else:
-                                raw = str(output) if output else ""
-                        elif hasattr(data, "content"):
-                            raw = data.content         # ToolMessage directly
-                        else:
-                            raw = str(data) if data else ""
-
-                        print(f"[playlist] raw type: {type(raw).__name__}, value: {repr(raw)[:200]}")
+                        raw = event.get("result", "")
+                        print(f"[playlist] build_playlist raw: {repr(raw)[:200]}")
                         try:
                             playlist_data = json.loads(raw) if isinstance(raw, str) else raw
                             if isinstance(playlist_data, str):
@@ -1171,6 +1238,28 @@ async def agent_playlist(body: PlaylistRequest):
 class AnalyticsChatRequest(BaseModel):
     prompt: str
     context_snapshot: dict | None = None
+
+
+# Enforced by the CLI's --json-schema, which is why the old "strip markdown code
+# fences before json.loads" workaround is gone.
+_ACTION_BUS_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "response": {"type": "string"},
+        "ui_actions": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "type": {"type": "string"},
+                    "payload": {"type": "object"},
+                },
+                "required": ["type", "payload"],
+            },
+        },
+    },
+    "required": ["response", "ui_actions"],
+}
 
 
 _ANALYTICS_SYSTEM = """You are a music analytics assistant for a personal Last.fm scrobble database with ~121k plays since 2019.
@@ -1336,24 +1425,15 @@ async def analytics_chat(body: AnalyticsChatRequest):
             "ui_actions": [],
         }
 
-    import anthropic
-    client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
+    from backend.agent.bridge_client import BridgeError, call_json
 
     user_msg = body.prompt
     if body.context_snapshot:
         user_msg = f"Current context: {json.dumps(body.context_snapshot)}\n\nUser request: {body.prompt}"
 
+    raw = ""
     try:
-        msg = client.messages.create(
-            model="claude-sonnet-4-6",
-            max_tokens=1024,
-            system=_ANALYTICS_SYSTEM,
-            messages=[{"role": "user", "content": user_msg}],
-        )
-        raw = msg.content[0].text.strip()
-        # Strip markdown code fences if present
-        if raw.startswith("```"):
-            raw = raw.split("\n", 1)[1].rsplit("```", 1)[0].strip()
+        raw = await call_json(user_msg, _ANALYTICS_SYSTEM, json_schema=_ACTION_BUS_SCHEMA)
         result = json.loads(raw)
         # Validate structure
         result.setdefault("response", "")
@@ -1361,26 +1441,41 @@ async def analytics_chat(body: AnalyticsChatRequest):
         return result
     except json.JSONDecodeError as e:
         return {"response": raw, "ui_actions": [], "parse_error": str(e)}
+    except BridgeError as e:
+        raise HTTPException(status_code=502, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/agent/bridge-health")
+async def bridge_health():
+    """
+    Diagnostic for the host-side Claude bridge. Every Claude-powered feature
+    depends on it, so a failure here explains a dead chat far faster than
+    reading container logs.
+    """
+    from backend.agent.bridge_client import BRIDGE_URL, health
+
+    try:
+        return {"reachable": True, "url": BRIDGE_URL, **(await health())}
+    except Exception as e:
+        return {
+            "reachable": False,
+            "url": BRIDGE_URL,
+            "error": str(e),
+            "hint": "On the Pi: systemctl --user status claude-bridge",
+        }
+
+
 @app.post("/agent/chat")
 async def agent_chat(body: ChatRequest):
-    from backend.agent.graph import get_agent
-
-    agent = await get_agent()
-    config = {"configurable": {"thread_id": body.thread_id}}
+    from backend.agent.bridge_client import stream_agent
 
     async def stream():
-        # Wrap astream_events with keep-alive: if a tool call takes >25s with no
-        # event, emit an SSE comment to prevent mobile browsers from dropping the
-        # connection. SSE comments (": ...") are ignored by the client.
-        gen = agent.astream_events(
-            {"messages": [{"role": "user", "content": body.message}]},
-            config=config,
-            version="v2",
-        )
+        # Keep-alive: if a tool call takes >25s with no event, emit an SSE
+        # comment so mobile browsers don't drop the connection. SSE comments
+        # (": ...") are ignored by the client.
+        gen = stream_agent(body.message, thread_id=body.thread_id, mode="chat").__aiter__()
         try:
             while True:
                 try:
@@ -1391,24 +1486,20 @@ async def agent_chat(body: ChatRequest):
                     yield ": keepalive\n\n"
                     continue
 
-                kind = event["event"]
-                if kind == "on_chat_model_stream":
-                    chunk = event["data"]["chunk"]
-                    text = None
-                    if chunk.content and isinstance(chunk.content, list):
-                        for part in chunk.content:
-                            if isinstance(part, dict) and part.get("type") == "text":
-                                text = part["text"]
-                    elif isinstance(chunk.content, str) and chunk.content:
-                        text = chunk.content
+                kind = event.get("type")
+                if kind == "text":
+                    text = event.get("text") or ""
                     if text:
                         encoded = "\n".join(f"data: {line}" for line in text.split("\n"))
                         yield f"{encoded}\n\n"
-                elif kind == "on_tool_start":
-                    tool_name = event.get("name", "tool")
-                    yield f"event: tool_start\ndata: {tool_name}\n\n"
-                elif kind == "on_tool_end":
-                    yield f"event: tool_end\ndata: done\n\n"
+                elif kind == "tool_start":
+                    yield f"event: tool_start\ndata: {event.get('name', 'tool')}\n\n"
+                elif kind == "tool_end":
+                    yield "event: tool_end\ndata: done\n\n"
+                elif kind == "error":
+                    msg = str(event.get("message", "unknown error")).replace("\n", " ")
+                    print(f"[chat] Bridge error: {msg}")
+                    yield f"event: error\ndata: {msg}\n\n"
         except Exception as e:
             print(f"[chat] Stream error: {e}")
             yield f"event: error\ndata: {str(e)}\n\n"

@@ -1,0 +1,19 @@
+# Host-side Claude bridge (scripts/claude_bridge.py) + MCP tool server.
+#
+# These install on the Pi HOST, not in the backend container — the bridge is
+# what runs the `claude` CLI under the subscription OAuth token. Install into
+# the repo venv:  .venv/bin/pip install -r requirements-bridge.txt
+#
+# Unpinned deliberately: the Pi's system Python is 3.13 and several of
+# requirements.txt's pins (notably pydantic==2.7.4) have no cp313 wheel and
+# fail to build from source. See PLAN.md §6.
+fastapi
+uvicorn
+pydantic
+python-dotenv
+mcp                # MCP stdio server exposing the domain tools to `claude`
+duckdb
+pandas             # query_database renders results via .df().to_markdown()
+tabulate
+requests
+langchain-core     # tool schemas shared with the container

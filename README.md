@@ -7,7 +7,7 @@ Pi, they call Claude live.
 
 A personal taste graph and AI agent built on real behavioral data. Tastemaker ingests years of listening history, reading history, and guitar practice logs, pipelines everything into a columnar database, and puts an AI agent on top that reasons across all of it — surfacing cross-domain connections between music, books, and guitar, generating opinionated playlists, and powering a four-page analytics suite controllable entirely through natural language.
 
-Self-hosted on a Raspberry Pi 5. No cloud services except the Anthropic API.
+Self-hosted on a Raspberry Pi 5. No cloud services except Claude itself, called through the local `claude` CLI on the subscription — not the metered API.
 
 ---
 
@@ -170,8 +170,7 @@ Examples of what this enables in practice:
 | Backend API | FastAPI (Python), async |
 | Database | DuckDB — single file, columnar engine, 10–100× faster than row stores for analytical aggregates |
 | Data transforms | dbt — SQL models with built-in tests (not_null, unique, referential integrity) |
-| AI agent | LangGraph + Claude claude-sonnet-4-6 |
-| Agent tracing | LangSmith |
+| AI agent | Headless `claude` CLI (Claude Sonnet) driven by a host-side bridge, domain tools over MCP |
 | Frontend | React + Vite + Tailwind CSS |
 | Charts | Highcharts (line, bar, pie, heatmap, scatter, bubble, calendar heatmap) |
 | State | Zustand |
@@ -237,16 +236,105 @@ Raspberry Pi 5 2GB
 │   ├── React frontend via Nginx (port 3000)
 │   ├── DuckDB                   (volume-mounted — survives rebuilds)
 │   └── cron                     (pipeline scheduler)
+├── claude-bridge.service        (host-side, port 8787 on the Docker gateway)
+│   └── spawns `claude -p` per turn → MCP tool server → same DuckDB file
 └── Tailscale daemon → reachable from iPhone anywhere
 ```
 
-Pipeline cron:
-```
-0 3 * * *   python -m backend.pipelines.lastfm     # incremental, watermark on scrobbled_at
-0 4 * * 0   python -m backend.pipelines.goodreads  # full reload + OpenLibrary enrichment
+### Claude bridge
+
+The backend makes **no direct Anthropic API calls**. Every Claude-powered
+feature — the guitar chat, playlist generation, and the AI Action Bus — posts to
+`scripts/claude_bridge.py`, a small host-side service that shells out to the
+`claude` CLI.
+
+The reason is billing: the CLI runs under the subscription OAuth token in
+`~/.claude_token`, so these calls cost nothing per-request, where the old
+`ANTHROPIC_API_KEY` path was metered (and eventually hit a zero balance, which
+is what killed chat entirely until this landed). The token can't live in the
+backend image — it's deliberately slim and has no `claude` binary — so the CLI
+runs on the host and the container reaches it over the Docker bridge gateway,
+authenticated with a shared `BRIDGE_TOKEN`.
+
+The agent's five domain tools (`query_database`, `build_playlist`, …) reach
+Claude through an MCP stdio server (`backend/agent/mcp_server.py`) that
+re-exports the exact tool objects in `backend/agent/tools.py`, so tool schemas
+live in one place. Streaming is preserved end to end — the CLI's
+`--include-partial-messages` gives real token deltas, which the bridge
+normalizes and the backend re-emits as the same SSE events the frontend already
+consumed. Multi-turn memory uses the CLI's own `--resume` sessions, which
+replaced the LangGraph SQLite checkpointer.
+
+Setup:
+```bash
+claude setup-token                      # writes CLAUDE_CODE_OAUTH_TOKEN
+echo 'CLAUDE_CODE_OAUTH_TOKEN=...' > ~/.claude_token && chmod 600 ~/.claude_token
+echo "BRIDGE_TOKEN=$(openssl rand -base64 24)" > ~/.claude_bridge_env && chmod 600 ~/.claude_bridge_env
+# mirror that same BRIDGE_TOKEN into .env so the container can authenticate
+
+.venv/bin/pip install -r requirements-bridge.txt
+cp scripts/claude-bridge.service ~/.config/systemd/user/
+systemctl --user daemon-reload && systemctl --user enable --now claude-bridge
+sudo loginctl enable-linger mambo       # so it starts at boot, not just at login
 ```
 
+Health check: `curl localhost:8000/agent/bridge-health`
+Logs: `journalctl --user -u claude-bridge -f`
+
+### Automated pipelines
+
+Cron drives everything through `scripts/pipelines.sh`, which POSTs to the
+backend's own pipeline endpoints rather than running `python -m
+backend.pipelines.*` directly. That's deliberate: DuckDB allows one writer, and
+the API container already holds the database, so the pipeline runs as a child
+of that same process instead of fighting it for the lock.
+
+```
+0 1 * * *   pipelines.sh lyrics       # lyrics.ovh, incremental
+30 1 * * *  pipelines.sh mood         # Claude mood tagging (needs lyrics first)
+0 2 * * *   pipelines.sh lastfm       # incremental, watermark on scrobbled_at
+0 5 * * 0   pipelines.sh visuals      # Deezer artwork, weekly
+0 6 * * 0   pipelines.sh musicbrainz  # artist metadata, weekly
+```
+
+Every pipeline is incremental, idempotent, and resumable — an interrupted run
+(reboot, rate limit, container rebuild) just picks up where it left off on the
+next tick. Two `flock`s guard them: one per pipeline so a slow pass can't stack
+up behind itself, and one global so two different pipelines never overlap.
+
+Schedules deliberately avoid the JobApplicationTracker cron bursts (`:25`/`:35`
+on hours 3,7,11,15,19,23) — that project spawns its own `claude` process, and
+two at once is more than 2GB of RAM wants to hold.
+
 Stats tables rebuild automatically after every Last.fm sync via `asyncio.create_task`.
+
+Goodreads stays manual: it needs a CSV export uploaded through the UI.
+
+### Mood tagging
+
+`backend/pipelines/analyze_mood_claude.py` scores every lyric against 21 mood
+labels through the Claude bridge. It replaces `analyze_mood.py`, which used a
+DeBERTa zero-shot classifier and was explicitly laptop-only — torch on this Pi
+meant ~1GB of RAM and a 6-18 hour backfill. The Claude version needs no new
+dependencies, peaks around 350MB, and costs nothing on the subscription.
+
+Both write the same `track_mood` schema (`tags` plus a `scores` JSON of all 21
+labels), so `analyze_mood.py --retag` still works for re-deriving tags at a
+different threshold without re-running any model.
+
+### Artwork
+
+`backend/pipelines/fetch_visuals.py` pulls artist and album images from
+Deezer's public API (no key) into `data/images/`, indexed by the
+`entity_images` table and served at `/images/*`. Roughly 18KB per image, so the
+full library is ~130MB.
+
+Deezer was chosen after testing the alternatives: Last.fm's artist images have
+been dead for years (`artist.getInfo` returns the same placeholder hash for
+everyone), and Cover Art Archive needs a MusicBrainz lookup first and only
+covers albums. Candidates are scored rather than taking the first hit —
+searching "Nirvana" returns the obscure 1960s UK band ahead of the Seattle one,
+so an exact-name match plus fan count breaks the tie.
 
 ---
 

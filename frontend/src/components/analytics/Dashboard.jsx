@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { AnalyticsShell } from './AnalyticsShell';
+import { ArtworkStrip } from './ArtworkStrip';
 import { useUIStore } from '../../store/uiStore';
 import { ActivityChart } from './charts/ActivityChart';
 import { GenreChart } from './charts/GenreChart';
@@ -189,6 +190,9 @@ export function Dashboard() {
                             </div>
                         )}
                     </div>
+
+                    {/* Artwork strip — the visual lead-in above the charts */}
+                    <ArtworkStrip period={period} />
 
                     {/* 2-column grid — half-width charts sit side-by-side, full-width span both */}
                     <div className="grid grid-cols-2 gap-4">

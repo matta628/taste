@@ -5,11 +5,7 @@ python-dotenv==1.0.1
 python-multipart==0.0.9
 requests==2.32.3
 pydantic==2.7.4
-langchain-anthropic==0.3.4
-langchain-core==0.3.51
-langgraph==0.3.31
-langgraph-checkpoint-sqlite==2.0.6
-aiosqlite==0.20.0
+langchain-core==0.3.51        # tool schemas only — no model client
 tabulate==0.9.0
 numpy==2.2.4
 pandas==2.2.3

@@ -15,3 +15,6 @@ target/
 dbt_packages/
 frontend/dist/
 lyrics_cache.json
+
+# Real secrets live here; .env.example documents the variable names
+.env

@@ -156,6 +156,12 @@ function handleAnalytics(rawPath) {
 
   if (path === '/analytics/search') return json(demoSearch(params.q, params.limit))
 
+  // Entities the export gave a full Deep Dive (everything reachable from the
+  // Dashboard and Time Machine lists) have their own stats fixture; anything
+  // else in the Explore tables is answered from its entity row below.
+  const exported = lookupAnalyticsFixture(rawPath)
+  if (exported !== undefined) return json(exported)
+
   let m
   if ((m = path.match(/^\/analytics\/artist\/([^/]+)\/stats$/))) {
     const row = statsFromEntities('artist', m[1])
@@ -169,9 +175,6 @@ function handleAnalytics(rawPath) {
     const row = statsFromEntities('track', m[1], params.artist)
     return row ? json(row) : json({ detail: 'Track not found in stats' }, 404)
   }
-
-  const found = lookupAnalyticsFixture(rawPath)
-  if (found !== undefined) return json(found)
 
   console.warn('[demo] no fixture for analytics path, returning empty:', rawPath)
   return json([])

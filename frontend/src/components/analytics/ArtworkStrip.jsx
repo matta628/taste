@@ -24,14 +24,15 @@ function initials(name) {
 }
 
 // Backend returns a path relative to its image root; nginx/vite both map
-// /api/* onto the backend with the prefix stripped.
+// /api/* onto the backend with the prefix stripped. The static demo has no
+// backend, so its fixtures carry image_url (the artwork's CDN source) instead.
 const imageUrl = (p) => (p ? `/api/images/${p}` : null)
 
 function Tile({ item, entity, onOpen }) {
   const [broken, setBroken] = useState(false)
   const label = item.name
   const sub = entity === 'album' ? item.artist : `${item.plays.toLocaleString()} plays`
-  const src = imageUrl(item.image_path)
+  const src = item.image_url || imageUrl(item.image_path)
   const showImage = src && !broken
 
   return (

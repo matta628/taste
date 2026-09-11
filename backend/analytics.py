@@ -1287,25 +1287,40 @@ def top_visuals(period: str = "90d", limit: int = 18, entity: str = "artist"):
     image are still returned (with image=None) so the UI can show a styled
     initials tile rather than a gap — artwork coverage is never 100%, since
     Deezer won't match every obscure release.
+
+    Periods with a precomputed column in the stats tables read from those.
+    The Dashboard also offers 3y and 4y, which have no column; those are
+    counted straight from raw_scrobbles. (They used to fall back to 90d
+    silently, so the strip labelled "3y" showed the last three months.)
     """
-    period_col = {
+    stats_col = {
         "7d": "plays_7d", "30d": "plays_30d", "90d": "plays_90d",
         "180d": "plays_180d", "1y": "plays_1y", "2y": "plays_2y",
         "5y": "plays_5y", "all": "total_plays",
-    }.get(period, "plays_90d")
+    }.get(period)
+    raw_days = {"3y": 1095, "4y": 1460}.get(period)
+    if stats_col is None and raw_days is None:
+        raise HTTPException(status_code=400, detail=f"unknown period: {period}")
     limit = max(1, min(limit, 60))
     conn = _db()
 
     try:
         if entity == "album":
+            if stats_col:
+                src = f"""SELECT album, artist, {stats_col} AS plays FROM album_stats
+                          WHERE {stats_col} > 0"""
+            else:
+                src = f"""SELECT album, artist, COUNT(*) AS plays FROM raw_scrobbles
+                          WHERE scrobbled_at >= now() - INTERVAL '{raw_days} days'
+                          GROUP BY album, artist"""
             rows = conn.execute(f"""
-                SELECT s.album, s.artist, s.{period_col} AS plays, i.local_path
-                FROM album_stats s
+                SELECT s.album, s.artist, s.plays, i.local_path
+                FROM ({src}) s
                 LEFT JOIN entity_images i
                        ON i.entity_type = 'album'
                       AND LOWER(i.entity_name) = LOWER(s.album || '||' || s.artist)
-                WHERE s.{period_col} > 0 AND s.album IS NOT NULL AND s.album <> ''
-                ORDER BY s.{period_col} DESC
+                WHERE s.album IS NOT NULL AND s.album <> ''
+                ORDER BY s.plays DESC
                 LIMIT ?
             """, [limit]).fetchall()
             return [
@@ -1320,13 +1335,18 @@ def top_visuals(period: str = "90d", limit: int = 18, entity: str = "artist"):
                 for r in rows
             ]
 
+        if stats_col:
+            src = f"SELECT artist, {stats_col} AS plays FROM artist_stats WHERE {stats_col} > 0"
+        else:
+            src = f"""SELECT artist, COUNT(*) AS plays FROM raw_scrobbles
+                      WHERE scrobbled_at >= now() - INTERVAL '{raw_days} days'
+                      GROUP BY artist"""
         rows = conn.execute(f"""
-            SELECT s.artist, s.{period_col} AS plays, i.local_path
-            FROM artist_stats s
+            SELECT s.artist, s.plays, i.local_path
+            FROM ({src}) s
             LEFT JOIN entity_images i
                    ON i.entity_type = 'artist' AND LOWER(i.entity_name) = LOWER(s.artist)
-            WHERE s.{period_col} > 0
-            ORDER BY s.{period_col} DESC
+            ORDER BY s.plays DESC
             LIMIT ?
         """, [limit]).fetchall()
         return [

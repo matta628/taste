@@ -31,12 +31,26 @@ from backend.analytics import (  # noqa: E402
     new_artists, listening_streak, top_entities, entities_artists,
     entities_albums, entities_tracks, artist_history, artist_stats_detail,
     artist_albums, artist_similar, artist_timeline, artist_sessions,
-    genre_tag_tracks, mood_tag_tracks, available_moods,
+    album_history, album_stats_detail, album_tracks,
+    track_history, track_stats_detail,
+    genre_tag_tracks, mood_tag_tracks, available_moods, top_visuals,
 )
 
-OUT_PATH = Path(__file__).resolve().parent.parent / "frontend/src/demo/fixtures/analytics.json"
+ROOT = Path(__file__).resolve().parent.parent
+OUT_PATH = ROOT / "frontend/src/demo/fixtures/analytics.json"
 ENTITY_EXPORT_LIMIT = 300
 NUM_DEEP_DIVE_ARTISTS = 10
+# Beyond everything reachable from the Dashboard and Time Machine lists, give
+# the top of each Explore table a full Deep Dive too.
+EXPLORE_DEEP_DIVE = {"artist": 50, "album": 30, "track": 30}
+# DeepDive.jsx PERIODS / AUTO_GRAN / METRIC_OPTIONS, and the Dashboard's period
+# buttons (which drive the artwork strip).
+DEEP_DIVE_PERIODS = ["7d", "30d", "90d", "1y", "2y", "3y", "4y", "5y", "all"]
+DEEP_DIVE_GRAN = {"7d": "day", "30d": "day", "90d": "week", "1y": "week", "2y": "month",
+                  "3y": "month", "4y": "month", "5y": "month", "all": "month"}
+METRICS = ["plays", "unique_tracks"]
+DASHBOARD_PERIODS = ["7d", "30d", "90d", "1y", "2y", "3y", "4y", "5y", "all"]
+ARTWORK_LIMIT = 20   # ArtworkStrip.jsx
 
 REL_DAYS = {
     "7d": 7, "30d": 30, "90d": 90, "180d": 180, "1y": 365,
@@ -93,6 +107,17 @@ def put(fn, path, call_params=None, bucket=None, year=None, **fn_extra_kwargs):
     fixtures[ckey(path, key_params)] = result
 
 
+def _remote_image_urls():
+    """local_path -> the CDN URL it was downloaded from."""
+    from backend.db.connect import connect
+    conn = connect()
+    try:
+        return dict(conn.execute(
+            "SELECT local_path, remote_url FROM entity_images WHERE local_path IS NOT NULL").fetchall())
+    finally:
+        conn.close()
+
+
 def main():
     print(f"[export] Exporting demo fixtures as of {TODAY.isoformat()}...")
 
@@ -142,23 +167,61 @@ def main():
     fixtures[ckey("/analytics/moods")] = available_moods()
     print("[export] Entity tables + moods list exported")
 
-    top_artist_names = [
-        r["artist"] for r in
-        fixtures[ckey("/analytics/entities/artists")]["rows"][:NUM_DEEP_DIVE_ARTISTS]
-    ]
-    print(f"[export] Deep Dive artists: {top_artist_names}")
+    # -- Artwork strip ---------------------------------------------------------
+    # The demo points each tile at the artwork's source URL on Deezer's CDN
+    # (image_url) instead of shipping copies: album art isn't ours to
+    # republish, and the repo stays small. A tile whose image fails to load
+    # falls back to initials, same as one with no artwork at all.
+    remote = _remote_image_urls()
+    reachable = {"artist": set(), "album": set(), "track": set()}
+    for p in DASHBOARD_PERIODS:
+        for ent in ("artist", "album"):
+            rows = top_visuals(period=p, limit=ARTWORK_LIMIT, entity=ent)
+            fixtures[ckey("/analytics/top-visuals",
+                          {"entity": ent, "limit": ARTWORK_LIMIT, "period": p})] = rows
+            for r in rows:
+                reachable[ent].add(r["name"])
+                r["image_url"] = remote.get(r["image_path"])
+    print("[export] Artwork strip fixtures")
 
-    # -- Deep Dive: full panel set for hand-picked top artists ---------------
-    for name in top_artist_names:
-        for period in ("1y", "all"):
-            put(artist_history, f"/analytics/artist/{name}/history",
-                {"granularity": GRAN_FOR_BUCKET[period], "metric": "plays"}, bucket=period,
-                name=name)
-            put(artist_albums, f"/analytics/artist/{name}/albums", {}, bucket=period, name=name)
-        fixtures[ckey(f"/analytics/artist/{name}/stats")] = artist_stats_detail(name)
-        fixtures[ckey(f"/analytics/artist/{name}/similar")] = artist_similar(name)
-        fixtures[ckey(f"/analytics/artist/{name}/timeline")] = artist_timeline(name)
-        fixtures[ckey(f"/analytics/artist/{name}/sessions")] = artist_sessions(name)
+    # -- Deep Dive: every entity a visitor can click through to --------------
+    for key, value in fixtures.items():
+        if key.startswith("/analytics/top-entities?"):
+            ent = key.split("entity_type=")[1].split("&")[0]
+            reachable[ent].update(r["name"] for r in value)
+    for ent, n in EXPLORE_DEEP_DIVE.items():
+        rows = fixtures[ckey(f"/analytics/entities/{ent}s")]["rows"][:n]
+        reachable[ent].update(r[ent] if ent in r else r.get("name") for r in rows)
+    reachable["artist"].update(
+        r["artist"] for r in fixtures[ckey("/analytics/entities/artists")]["rows"][:NUM_DEEP_DIVE_ARTISTS])
+    for ent in reachable:
+        reachable[ent].discard(None)
+    print("[export] Deep Dive entities: " +
+          ", ".join(f"{len(v)} {k}s" for k, v in reachable.items()))
+
+    history = {"artist": artist_history, "album": album_history, "track": track_history}
+    for ent, names in reachable.items():
+        for name in sorted(names):
+            for period in DEEP_DIVE_PERIODS:
+                for metric in METRICS:
+                    put(history[ent], f"/analytics/{ent}/{name}/history",
+                        {"granularity": DEEP_DIVE_GRAN[period], "metric": metric},
+                        bucket=period, name=name)
+                if ent == "artist":
+                    put(artist_albums, f"/analytics/artist/{name}/albums", {}, bucket=period, name=name)
+                elif ent == "album":
+                    put(album_tracks, f"/analytics/album/{name}/tracks", {}, bucket=period, name=name)
+            if ent == "artist":
+                fixtures[ckey(f"/analytics/artist/{name}/stats")] = artist_stats_detail(name)
+                fixtures[ckey(f"/analytics/artist/{name}/similar")] = artist_similar(name)
+                fixtures[ckey(f"/analytics/artist/{name}/timeline")] = artist_timeline(name)
+                fixtures[ckey(f"/analytics/artist/{name}/sessions")] = artist_sessions(name)
+            else:
+                stats = album_stats_detail if ent == "album" else track_stats_detail
+                try:
+                    fixtures[ckey(f"/analytics/{ent}/{name}/stats")] = stats(name)
+                except Exception as e:   # a name the stats tables don't know: leave it to the entity-row fallback
+                    print(f"[export]   no {ent} stats for {name!r}: {e}")
     print(f"[export] Deep Dive fixtures done, total keys: {len(fixtures)}")
 
     # -- Genre / mood tag drill-down tables (top tags only) ------------------

@@ -401,7 +401,10 @@ async def _lyrics_background_fetch():
     print("[lyrics] Starting lyrics fetch for top 100 tracks (last 30 days)…")
 
     try:
-        conn = duckdb.connect(str(DB_PATH), read_only=True)
+        # Through db_connect like every other connection in this process: a
+        # read_only open alongside the API's read-write ones is a config
+        # conflict for DuckDB (see backend/db/connect.py).
+        conn = db_connect()
         rows = conn.execute("""
             SELECT track, artist, COUNT(*) as plays
             FROM raw_scrobbles
@@ -433,9 +436,9 @@ async def _lyrics_background_fetch():
 @app.get("/taste/lyrics-snippets")
 def lyrics_snippets():
     """Return cached Genius lyric snippets. Cache is populated in background on startup."""
-    if LYRICS_CACHE.exists():
+    if LYRICS_CACHE.exists() and LYRICS_CACHE.stat().st_size > 10:
         return json.loads(LYRICS_CACHE.read_text())
-    return []
+    return []   # missing, or truncated by a sync and not refetched yet
 
 
 # ---------------------------------------------------------------------------
@@ -559,9 +562,13 @@ async def trigger_lastfm_sync():
                 capture_output=True, text=True
             )
             print("[lastfm] sync done:", result.stdout[-500:] if result.stdout else result.stderr[-500:])
-            # Invalidate lyrics cache so it rebuilds with fresh scrobble data
+            # Invalidate lyrics cache so it rebuilds with fresh scrobble data.
+            # Truncate, don't unlink: the file is bind-mounted into the
+            # container, and unlinking a mount point fails with EBUSY. That
+            # used to kill this task before the stats rebuild below, so every
+            # sync left artist/album/track stats stale.
             if LYRICS_CACHE.exists():
-                LYRICS_CACHE.unlink()
+                LYRICS_CACHE.write_text("")
                 print("[lyrics] Cache invalidated after sync — rebuilding in background")
                 asyncio.create_task(_lyrics_background_fetch())
             # Rebuild pre-aggregated stats tables

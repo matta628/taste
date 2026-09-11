@@ -33,11 +33,13 @@ from backend.analytics import (  # noqa: E402
     artist_albums, artist_similar, artist_timeline, artist_sessions,
     album_history, album_stats_detail, album_tracks,
     track_history, track_stats_detail,
-    genre_tag_tracks, mood_tag_tracks, available_moods, top_visuals,
+    genre_tag_tracks, mood_tag_tracks, available_moods, top_visuals, lyric_lines,
 )
+from backend.books import list_books  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 OUT_PATH = ROOT / "frontend/src/demo/fixtures/analytics.json"
+BOOKS_PATH = ROOT / "frontend/src/demo/fixtures/books.json"
 ENTITY_EXPORT_LIMIT = 300
 NUM_DEEP_DIVE_ARTISTS = 10
 # Beyond everything reachable from the Dashboard and Time Machine lists, give
@@ -184,6 +186,15 @@ def main():
                 r["image_url"] = remote.get(r["image_path"])
     print("[export] Artwork strip fixtures")
 
+    # -- Dashboard lyrics carousel and rails ---------------------------------
+    # Both call with a fixed limit; the demo serves one shuffle of the same pool.
+    for n in (40, 60):
+        lines = lyric_lines(limit=n)
+        for l in lines:
+            l["image_url"] = remote.get(l["image_path"])
+        fixtures[ckey("/analytics/lyric-lines", {"limit": n})] = lines
+    print("[export] Lyric lines exported")
+
     # -- Deep Dive: every entity a visitor can click through to --------------
     for key, value in fixtures.items():
         if key.startswith("/analytics/top-entities?"):
@@ -235,6 +246,10 @@ def main():
             mood_tag_tracks(tag, limit=50)
     print(f"[export] Tag drill-down fixtures for {len(top_genre_tags)} genres, "
           f"{len(top_mood_tags)} moods")
+
+    # -- Reading log ---------------------------------------------------------
+    BOOKS_PATH.write_text(json.dumps(list_books(), indent=None, separators=(",", ":"), default=str))
+    print(f"[export] Books: {BOOKS_PATH.stat().st_size / 1024:.0f} KB")
 
     OUT_PATH.parent.mkdir(parents=True, exist_ok=True)
     OUT_PATH.write_text(json.dumps(fixtures, indent=None, separators=(",", ":"), default=str))

@@ -15,6 +15,7 @@ import chat_stream        from './fixtures/chat_stream.js'
 import guitar_chat_script from './fixtures/guitar_chat_script.js'
 import action_bus_script  from './fixtures/action_bus_script.js'
 import analytics_fixture  from './fixtures/analytics.json'
+import books_fixture      from './fixtures/books.json'
 import { canonicalKey, parsePathAndQuery } from './analyticsKey.js'
 
 // ---------------------------------------------------------------------------
@@ -145,6 +146,25 @@ function demoSearch(q, limit) {
   ]
   results.sort((a, b) => (b.plays || 0) - (a.plays || 0))
   return results.slice(0, Number(limit) || 20)
+}
+
+// One mutable copy per visit: edits, additions and deletions stick until reload.
+const demoBooks = books_fixture.books.map(b => ({ ...b }))
+
+function bookCounts() {
+  const shelves = {}
+  let pages = 0, ratingSum = 0, rated = 0
+  for (const b of demoBooks) {
+    shelves[b.exclusive_shelf ?? 'unshelved'] = (shelves[b.exclusive_shelf ?? 'unshelved'] ?? 0) + 1
+    if (b.exclusive_shelf === 'read') pages += b.num_pages ?? 0
+    if (b.rating > 0) { ratingSum += b.rating; rated++ }
+  }
+  return {
+    total: demoBooks.length,
+    shelves,
+    pages_read: pages,
+    average_rating: rated ? Math.round((ratingSum / rated) * 100) / 100 : null,
+  }
 }
 
 function handleAnalytics(rawPath) {
@@ -414,8 +434,50 @@ async function route(url, method, body) {
     return makeSSEStream(matchGuitarScript(body?.message) ?? chat_stream)
 
   // Pipelines — status
+  // Books — the real reading log, editable for the visit.
+  if (path === '/books' && method === 'GET')
+    return json({ books: demoBooks, counts: bookCounts() })
+
+  if (path === '/books' && method === 'POST') {
+    const book = {
+      book_id: `manual-${Math.random().toString(36).slice(2, 10)}`,
+      rating: 0, exclusive_shelf: 'read', source: 'manual',
+      date_added: new Date().toISOString().slice(0, 10), ...body,
+    }
+    demoBooks.unshift(book)
+    return json(book, 201)
+  }
+
+  const bookMatch = path.match(/^\/books\/(.+)$/)
+  if (bookMatch) {
+    const id = decodeURIComponent(bookMatch[1])
+    const i = demoBooks.findIndex(b => b.book_id === id)
+    if (i === -1) return json({ detail: 'no such book' }, 404)
+    if (method === 'PATCH') {
+      demoBooks[i] = { ...demoBooks[i], ...body }
+      return json(demoBooks[i])
+    }
+    if (method === 'DELETE') {
+      demoBooks.splice(i, 1)
+      return noContent()
+    }
+  }
+
+  // The Goodreads import does an Open Library lookup per book — there's no
+  // backend here to do it, so say so rather than pretending it worked.
+  if (path === '/pipelines/goodreads/upload' && method === 'POST')
+    return json({ status: 'demo' }, 202)
+
   if (path === '/pipelines/status' && method === 'GET')
-    return json(pipeline_fixture)
+    return json({
+      ...pipeline_fixture,
+      goodreads: {
+        ...(pipeline_fixture.goodreads ?? {}),
+        process_running: false,
+        book_count: demoBooks.length,
+        last_error: 'Importing needs the backend — it looks up every book on Open Library. Self-hosted, this reads your CSV and updates the library in place.',
+      },
+    })
 
   // Pipelines — any trigger/upload (silently succeed)
   if (path.startsWith('/pipelines/') && method === 'POST')

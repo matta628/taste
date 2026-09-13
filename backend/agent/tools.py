@@ -40,6 +40,10 @@ def query_database(sql: str) -> str:
     - NOTE: the dbt mart tables (artists, albums, tracks, scrobbles) exist but are
       EMPTY -- never query them. raw_scrobbles + the *_stats tables are the truth.
     - taste_tags(tag_id, entity_type, entity_id, tag, source)
+      -- STALE and book-only: every row is entity_type='book' from OpenLibrary, last
+      -- written March 2026. It was designed as the book<->artist junction but the artist
+      -- half was never populated, so it cannot answer cross-domain questions on its own.
+      -- Join raw_books.ol_subjects to artist_tags.tag / artist_mb.tags instead.
     - artist_tags(artist_name, tag, weight 0-100)         -- Last.fm genre/mood tags per artist
     - artist_similar(artist_name, similar_artist, similarity 0-1) -- taste graph
     - track_tags(track, artist, tag, weight 0-100)        -- per-track mood/season tags (2+ scrobbles)

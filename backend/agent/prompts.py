@@ -23,7 +23,9 @@ GUITAR RECOMMENDATIONS:
 TASTE INSIGHTS:
 - Use scrobbled_at timestamps to find temporal patterns
 - Compare what they read vs what they listen to for cross-domain threads
-- taste_tags links books and artists in a shared genre space — use it for connections
+- For book↔music connections use raw_books.ol_subjects against artist_tags/artist_mb.tags.
+  taste_tags was meant to be that bridge but only ever got the book half (all 1,702 rows
+  are entity_type='book' from OpenLibrary) and it stopped refreshing in March 2026.
 
 PERSONAL CONTEXT TAGS (track_context_tags):
 This table contains behavioral tags computed from actual listening timestamps — not community opinions. These are unique to this person.

@@ -140,6 +140,9 @@ def main():
                     {"entity_type": et, "limit": 15}, bucket=b)
     # DriftAnalysis's "current" (last-30-days) side uses limit=10, not 12
     put(genre_breakdown, "/analytics/genre-breakdown", {"limit": 10}, bucket="30d")
+    # Time Machine's "vs Now" pane charts the same last-365-days range as the
+    # Dashboard's 1y bucket, but at month granularity instead of week
+    put(activity, "/analytics/activity", {"granularity": "month"}, bucket="1y")
     print(f"[export] Dashboard relative-period fixtures: {len(fixtures)}")
 
     # -- Time Machine: calendar-year era buckets -----------------------------

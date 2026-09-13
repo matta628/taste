@@ -1,7 +1,7 @@
 # Tastemaker
 
 **Live demo:** https://matta628.github.io/tastemaker/ — a static snapshot
-of ~3 years of my real listening data. Chat/action-bus responses are
+of seven years of my real listening data. Chat/action-bus responses are
 pre-recorded in this build (see [Demo Mode](#demo-mode)); self-hosted on my
 Pi, they call Claude live.
 
@@ -15,7 +15,7 @@ Self-hosted on a Raspberry Pi 5. No cloud services except Claude itself, called 
 
 The link above is a static build hosted on GitHub Pages — it has no backend at all. Two things make that work without it being mistaken for the live app:
 
-- **Real data, canned decisions.** The dashboard, Discover, Time Machine, and Deep Dive pages are all rendering ~3 years of my actual listening history, exported at build time. The one thing that's simulated is Claude's decision-making: chat replies and AI Action Bus responses are pre-scripted conversations, not a live model call. Everything downstream of that — navigation, chart filters, era comparisons — is the same real code the live app uses, just driven by a scripted `ui_actions` payload instead of a live one.
+- **Real data, canned decisions.** The dashboard, Discover, Time Machine, and Deep Dive pages are all rendering seven years of my actual listening history, exported at build time. The one thing that's simulated is Claude's decision-making: chat replies and AI Action Bus responses are pre-scripted conversations, not a live model call. Everything downstream of that — navigation, chart filters, era comparisons — is the same real code the live app uses, just driven by a scripted `ui_actions` payload instead of a live one.
 - **Self-hosted, it's live.** Running on my own Raspberry Pi, both chat surfaces call Claude for real, per-message, against the same database. The demo banner at the top of the page always says which mode you're in.
 
 ## What It Does
@@ -34,11 +34,11 @@ A conversational agent that knows you specifically — not music in general. It 
 
 - **Behavioral context tags** — Unlike generic mood tags sourced from the internet, Tastemaker computes personal behavioral tags from your own scrobble timestamps. If a track shows up in your history consistently after midnight, it gets tagged `late_night` with a confidence score based on the fraction of plays in that window. Same for seasons. "Songs I actually listen to in winter" and "songs the internet says sound wintry" are different things.
 
-- **ML mood analysis** — Lyrics for ~60-70% of the library are fetched from Genius, then run through a zero-shot NLP pipeline that produces 14 multi-label mood tags (melancholic, euphoric, anxious, tender, defiant, nostalgic, dark, hopeful, lonely, romantic, bitter, raw, peaceful, restless). The agent can query these alongside behavioral data: *"late night sad songs"* → join `track_mood` WHERE `melancholic = ANY(tags)` AND `track_context_tags.tag = 'late_night'` AND `confidence >= 0.5`.
+- **Mood analysis** — Lyrics for ~69% of the library (3,235 of 4,712 distinct tracks) are fetched from lyrics.ovh, then scored by Claude against 21 multi-label mood tags (melancholic, euphoric, anxious, tender, defiant, nostalgic, dark, hopeful, lonely, romantic, bitter, raw, peaceful, restless, happy, angry, energetic, playful, dance, psychedelic, otherworldly). The agent can query these alongside behavioral data: *"late night sad songs"* → join `track_mood` WHERE `melancholic = ANY(tags)` AND `track_context_tags.tag = 'late_night'` AND `confidence >= 0.5`.
 
 - **Persistent memory** — Conversation threads are checkpointed to SQLite and survive server restarts. You can pick up a conversation where you left off.
 
-**Agent architecture:** LangGraph `create_react_agent` with a proper tool loop and state management. Five tools: `query_database` (read-only DuckDB SQL), `build_playlist` (Apple Music bridge), `track_similar_lookup` (Last.fm), `artist_top_tracks` (Last.fm), and `discover_tracks` (genre-based discovery with full scrobble anti-join). Streamed token-by-token over SSE. Traced end-to-end in LangSmith.
+**Agent architecture:** headless `claude` driven by a host-side bridge, with the domain tools exposed over an MCP stdio server (see *Claude bridge* below). Five tools: `query_database` (read-only DuckDB SQL), `build_playlist` (Apple Music bridge), `track_similar_lookup` (Last.fm), `artist_top_tracks` (Last.fm), and `discover_tracks` (genre-based discovery with full scrobble anti-join). Streamed token-by-token over SSE. This replaced a LangGraph `create_react_agent` on the metered Anthropic API in August 2026; `langchain-core` is still a dependency, but only for the `@tool` decorator that defines those schemas.
 
 ---
 
@@ -155,10 +155,10 @@ Examples of what this enables in practice:
 
 | Table | What | How |
 |---|---|---|
-| `track_mood` | 14 multi-label mood tags per track, confidence scores | Zero-shot NLP on lyrics via `analyze_mood.py` |
+| `track_mood` | 21 multi-label mood tags per track, confidence scores | Claude scoring of lyrics via `analyze_mood_claude.py` |
 | `track_context_tags` | Personal behavioral tags: time-of-day, season, frequency | Computed from scrobble timestamp distributions |
-| `taste_tags` | Cross-domain junction linking artists and books in shared genre space | dbt mart model |
-| `listening_sessions` | 30-minute session windows from raw scrobbles | dbt mart model |
+| `taste_tags` | **Legacy.** Meant to be the artist↔book junction, but only the book half was ever populated (1,702 OpenLibrary rows) and it stopped refreshing in March 2026 | dbt mart model, no longer run |
+| `listening_sessions` | **Legacy.** 30-minute session windows, last built March 2026 and not refreshed since | dbt mart model, no longer run |
 | `artist_stats` / `album_stats` / `track_stats` | Pre-aggregated play counts across 9 time windows, ranks, deltas, streaks | Full truncate + recompute after each sync (~3–5 seconds) |
 
 ---
@@ -169,7 +169,7 @@ Examples of what this enables in practice:
 |---|---|
 | Backend API | FastAPI (Python), async |
 | Database | DuckDB — single file, columnar engine, 10–100× faster than row stores for analytical aggregates |
-| Data transforms | dbt — SQL models with built-in tests (not_null, unique, referential integrity) |
+| Data transforms | Incremental Python pipelines in `backend/pipelines/`. A dbt layer was built early and retired — see below |
 | AI agent | Headless `claude` CLI (Claude Sonnet) driven by a host-side bridge, domain tools over MCP |
 | Frontend | React + Vite + Tailwind CSS |
 | Charts | Highcharts (line, bar, pie, heatmap, scatter, bubble, calendar heatmap) |
@@ -188,9 +188,9 @@ Examples of what this enables in practice:
 
 **Pre-aggregated stats tables** — `artist_stats`, `album_stats`, and `track_stats` are fully rebuilt after every Last.fm sync (full truncate + recompute in ~3–5 seconds). This means Discover filters and sorts run against pre-computed columns with no GROUP BY at query time. The tradeoff is that period columns are relative to rebuild time, not query time.
 
-**dbt for transforms** — Raw data is never modified. Every clean table is a reproducible SQL model with tests. Adding a new enrichment table is a new `.sql` file with `{{ ref() }}` dependencies.
+**dbt, and why it is no longer in the path** — This started with a dbt layer on DuckDB: six models across staging and marts, with `sources.yml` tests. It was retired in March 2026 and kept rather than deleted. Two reasons. The enrichment that actually matters here (lyrics, moods, artwork, MusicBrainz) is incremental and resumable against rate-limited external APIs that fail partway, which is a poor fit for whole-table SQL rebuilds. And `artist_stats` turned out to be simpler to rebuild directly in Python, which is what `rebuild_stats.py` now owns. The models are still in `dbt/`, nothing invokes them, and their output tables are either empty or frozen at March 2026. `query_database`'s docstring tells the agent which ones not to trust.
 
-**LangGraph over raw API calls** — The agent tool loop, state management, and retry logic would have been hundreds of lines hand-rolled. LangGraph handles it. The checkpointer gives persistent conversation threads for free.
+**Headless `claude` over a metered API client** — The agent was a LangGraph `create_react_agent` on `ChatAnthropic` until the API credit ran out, which took chat down with it. Running the CLI under a subscription OAuth token removes the per-request cost, and the CLI's own `--resume` sessions replaced the SQLite checkpointer. The price is a subprocess per turn (~1-3s of startup) and a host-side service, because the backend image deliberately carries neither the binary nor the token.
 
 **Behavioral tags over community tags** — `track_context_tags` is computed from your own scrobble timestamps — not from what the internet thinks a track sounds like. "Late night music" means tracks you actually listen to after midnight, with statistical confidence. This is a fundamentally different signal than Last.fm's community tags.
 
@@ -206,7 +206,7 @@ Six layers from raw ingest to user-saved configurations:
 
 1. **Raw** — Verbatim ingest: `raw_scrobbles`, `raw_books`, `pipeline_state` (watermark)
 2. **Guitar** — Direct app writes: `guitar_songs`, `practice_log`
-3. **Cleaned dimensions** — dbt staging + marts: `artists`, `albums`, `tracks`, `books`, `scrobbles`, `listening_sessions`, `taste_tags`
+3. **Cleaned dimensions (legacy, not read by anything)** — dbt staging + marts. `artists`, `albums`, `tracks` and `scrobbles` are empty; `stg_scrobbles`, `stg_books`, `listening_sessions` and `taste_tags` are frozen at March 2026
 4. **Enrichment** — `artist_tags`, `artist_similar`, `track_tags`, `track_mood`, `artist_mb`, `track_lyrics`, `track_context_tags`
 5. **Analytics stats** — `artist_stats`, `album_stats`, `track_stats` (pre-aggregated, 9 time windows each)
 6. **User API persistence** — `user_dashboards`, `dashboard_charts`, `explore_layouts`, `user_reports`, `user_sets`, `set_members`
@@ -342,10 +342,10 @@ so an exact-name match plus fan count breaks the tie.
 
 | Phase | Status | Description |
 |---|---|---|
-| Foundation | Done | DuckDB, Last.fm pipeline, Goodreads + OpenLibrary, dbt models |
+| Foundation | Done | DuckDB, Last.fm pipeline, Goodreads + OpenLibrary (dbt models built here, later retired) |
 | Guitar App | Done | FastAPI CRUD, React PWA, lyrics carousel |
 | Pi Deploy | Done | Docker Compose, Tailscale, cron pipelines |
-| AI Agent | Done | LangGraph agent, 5 tools, SSE streaming, persistent threads |
+| AI Agent | Done | MCP tool server + headless `claude`, 5 tools, SSE streaming, resumable threads |
 | Analytics POC | Done | All 4 pages, AI action bus, 29 actions |
 | Apple Music | Next | UI built, iOS Shortcut bridge working; full API pending Apple Developer account |
 | Telegram Bot | Planned | `/guitar`, `/read`, `/vibe`, `/playlist` commands wired to the same agent |

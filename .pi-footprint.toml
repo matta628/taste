@@ -1,0 +1,30 @@
+# What tastemaker occupies on the Pi. Read by ~/portfolio/hub.
+# Port convention is the one already set down in ~/PORTS.md: one 8xxx backend
+# per project, and a matching-index 3xxx frontend if it has a standing UI.
+name   = "tastemaker"
+repo   = "matta628/taste"
+public = true
+tier   = "on-demand"          # always | on-demand | batch
+
+[ports]
+3000 = "frontend (nginx, container)"
+8000 = "backend (uvicorn, container)"
+8787 = "claude bridge, host side, bound to the docker bridge IP"
+
+[services]
+compose = "tastemaker"
+systemd = ["claude-bridge.service"]
+
+[cron]
+# Source of record lives here; ops/scripts holds the deployed copy that cron
+# actually runs. `hub scripts` checks the two have not drifted, and
+# `hub scripts --deploy` regenerates the copy with the quiet-mode guard.
+[cron.deploy]
+"scripts/pipelines.sh" = "tastemaker_pipelines.sh"
+
+[demo]
+strategy = "derived"
+command  = "npm run build:demo"
+# Public repo: nothing to redact. The demo differs only in shape — fixtures
+# instead of the live backend, and a base path for static hosting.
+asserts  = []
